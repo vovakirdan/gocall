@@ -23,18 +23,37 @@ async function start() {
 
     signalingSocket.onopen = () => {
         console.log("WebSocket connected");
+        // Assume, we have roomId from URL parameters or strongly fixed:
+        let roomId = "main"; 
+        signalingSocket.send(JSON.stringify({ type: "join", roomId: roomId }));
     };
 
     signalingSocket.onmessage = (event) => {
-        const message = JSON.parse(event.data);
-
-        if (message.ice) {
-            console.log("Got ICE from signaling:", message.ice);
-            pc.addIceCandidate(message.ice).catch(e=>console.error(e));
+        const msg = JSON.parse(event.data);
+    
+        // msg: { type: "offer"/"answer"/"ice", roomId: "xxx", payload: {...} }
+    
+        if (msg.type === "offer") {
+            console.log("Got offer from remote:", msg.payload);
+            pc.setRemoteDescription(new RTCSessionDescription(msg.payload)).then(async () => {
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                // Send answer
+                signalingSocket.send(JSON.stringify({ 
+                    type: "answer", 
+                    roomId: msg.roomId, 
+                    payload: pc.localDescription 
+                }));
+            });
+    
+        } else if (msg.type === "answer") {
+            console.log("Got answer from remote:", msg.payload);
+            pc.setRemoteDescription(new RTCSessionDescription(msg.payload));
+    
+        } else if (msg.type === "ice") {
+            console.log("Got ICE from remote:", msg.payload);
+            pc.addIceCandidate(new RTCIceCandidate(msg.payload));
         }
-
-        // will handle offer/answer
-        // todo
     };
 
     signalingSocket.onerror = (err) => {
@@ -76,11 +95,11 @@ async function call() {
     await pc.setLocalDescription(offer);
 
     console.log("Sending Offer to server via HTTP");
-    let response = await fetch(webrtcUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(offer)
-    });
+    signalingSocket.send(JSON.stringify({
+        type: "offer",
+        roomId: "main",
+        payload: offer
+    }));
 
     if (!response.ok) {
         console.error("Failed to get answer from server");
