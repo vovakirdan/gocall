@@ -1,4 +1,4 @@
-package signaling
+package server
 
 import (
 	"log"
@@ -8,7 +8,7 @@ import (
 )
 
 // websocket 
-var upgrader = websocket.upgrader{
+var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
