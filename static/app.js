@@ -1,4 +1,6 @@
 const signalingUrl = "ws://localhost:8080/signal";
+const roomId = "main"; // For testing, both clients use the same roomId
+
 const webrtcUrl = "http://localhost:8080/webrtc";
 
 let localVideo = document.getElementById('localVideo');
@@ -24,7 +26,6 @@ async function start() {
     signalingSocket.onopen = () => {
         console.log("WebSocket connected");
         // Assume, we have roomId from URL parameters or strongly fixed:
-        let roomId = "main"; 
         signalingSocket.send(JSON.stringify({ type: "join", roomId: roomId }));
     };
 
@@ -34,25 +35,11 @@ async function start() {
         // msg: { type: "offer"/"answer"/"ice", roomId: "xxx", payload: {...} }
     
         if (msg.type === "offer") {
-            console.log("Got offer from remote:", msg.payload);
-            pc.setRemoteDescription(new RTCSessionDescription(msg.payload)).then(async () => {
-                const answer = await pc.createAnswer();
-                await pc.setLocalDescription(answer);
-                // Send answer
-                signalingSocket.send(JSON.stringify({ 
-                    type: "answer", 
-                    roomId: msg.roomId, 
-                    payload: pc.localDescription 
-                }));
-            });
-    
+            handleOffer(msg.payload);
         } else if (msg.type === "answer") {
-            console.log("Got answer from remote:", msg.payload);
-            pc.setRemoteDescription(new RTCSessionDescription(msg.payload));
-    
+            handleAnswer(msg.payload);
         } else if (msg.type === "ice") {
-            console.log("Got ICE from remote:", msg.payload);
-            pc.addIceCandidate(new RTCIceCandidate(msg.payload));
+            handleRemoteICE(msg.payload);
         }
     };
 
@@ -81,8 +68,12 @@ async function start() {
     // sending ICE candidates to WebSocket
     pc.onicecandidate = (event) => {
         if (event.candidate) {
-            console.log("Got local ICE, sending to signaling");
-            signalingSocket.send(JSON.stringify({ ice: event.candidate }));
+            console.log("Sending ICE candidate to remote");
+            signalingSocket.send(JSON.stringify({
+                type: "ice",
+                roomId: roomId,
+                payload: event.candidate
+            }));
         }
     };
 
@@ -90,6 +81,7 @@ async function start() {
 }
 
 async function call() {
+    console.log("Creating offer");
     // create offer SDP
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -111,4 +103,28 @@ async function call() {
 
     await pc.setRemoteDescription(answer);
     console.log("Remote SDP set successfully");
+}
+
+async function handleOffer(offer) {
+    console.log("Received offer");
+    await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    console.log("Sending answer back to initiator");
+    signalingSocket.send(JSON.stringify({
+        type: "answer",
+        roomId: roomId,
+        payload: answer
+    }));
+}
+
+async function handleAnswer(answer) {
+    console.log("Received answer");
+    await pc.setRemoteDescription(new RTCSessionDescription(answer));
+}
+
+function handleRemoteICE(candidate) {
+    console.log("Received ICE candidate");
+    pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e=>console.error("Error adding ICE:", e));
 }

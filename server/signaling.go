@@ -15,15 +15,13 @@ type Message struct {
 	Payload json.RawMessage `json:"payload"`  // message body (SDP, ICE etc)
 }
 
-// store rooms: each room has a list of connections
 var (
-	rooms = make(map[string]map[*websocket.Conn]bool)  // 
+	// store rooms: each room has a list of connections
+	rooms = make(map[string]map[*websocket.Conn]bool)  // Rooms: roomId -> set of connections
 	roomsMu sync.Mutex
-)
-
-// connRooms maps a connection to its room ID (if any)
-var (
-	connRooms   = make(map[*websocket.Conn]string)
+	
+	// connRooms maps a connection to its room ID (if any)
+	connRooms   = make(map[*websocket.Conn]string)  // connRooms: connection -> roomId
 	connRoomsMu sync.Mutex
 )
 
@@ -107,9 +105,8 @@ func handleRelayMessage(conn *websocket.Conn, msg Message) {
 	}
 
 	roomsMu.Lock()
-	defer roomsMu.Unlock()
-
 	connections, exists := rooms[roomId]
+	roomsMu.Unlock()
 	if !exists {
 		log.Println("Room not found:", roomId)
 		return
