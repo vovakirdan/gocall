@@ -1,19 +1,28 @@
-const signalingUrl = "ws://localhost:8080/signal";
-const roomId = "main"; // For testing, both clients use the same roomId
+let wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+let baseHost = window.location.host;
 
-const webrtcUrl = "http://localhost:8080/webrtc";
+const signalingUrl = wsProtocol + '//' + baseHost + '/signal';
+const webrtcUrl = window.location.origin + '/webrtc';  // (Если используете для HTTP сигналинга, сейчас остается для справки)
+const roomId = "main"; // For testing, both clients use the same roomId
 
 let localVideo = document.getElementById('localVideo');
 let remoteVideo = document.getElementById('remoteVideo');
 let startButton = document.getElementById('startButton');
 let callButton = document.getElementById('callButton');
+let muteButton = document.getElementById('muteButton');
+let cameraButton = document.getElementById('cameraButton');
 
 let localStream = null;
 let pc = null;
 let signalingSocket = null;
 
+let isMuted = false;
+let isCameraOff = false;
+
 startButton.onclick = start;
 callButton.onclick = call;
+muteButton.onclick = toggleMute;
+cameraButton.onclick = toggleCamera;
 
 async function start() {
     // ask for local mediastream (camera + microphone)
@@ -25,15 +34,12 @@ async function start() {
 
     signalingSocket.onopen = () => {
         console.log("WebSocket connected");
-        // Assume, we have roomId from URL parameters or strongly fixed:
+        // Join the room
         signalingSocket.send(JSON.stringify({ type: "join", roomId: roomId }));
     };
 
     signalingSocket.onmessage = (event) => {
         const msg = JSON.parse(event.data);
-    
-        // msg: { type: "offer"/"answer"/"ice", roomId: "xxx", payload: {...} }
-    
         if (msg.type === "offer") {
             handleOffer(msg.payload);
         } else if (msg.type === "answer") {
@@ -78,18 +84,19 @@ async function start() {
     };
 
     callButton.disabled = false;
+    muteButton.disabled = false;
+    cameraButton.disabled = false;
 }
 
 async function call() {
     console.log("Creating offer");
-    // create offer SDP
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
-    console.log("Sending Offer to server via HTTP");
+    console.log("Sending Offer to server via WebSocket");
     signalingSocket.send(JSON.stringify({
         type: "offer",
-        roomId: "main",
+        roomId: roomId,
         payload: offer
     }));
 
@@ -127,4 +134,22 @@ async function handleAnswer(answer) {
 function handleRemoteICE(candidate) {
     console.log("Received ICE candidate");
     pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e=>console.error("Error adding ICE:", e));
+}
+
+// Toggle microphone
+function toggleMute() {
+    if (localStream) {
+        isMuted = !isMuted;
+        localStream.getAudioTracks().forEach(track => track.enabled = !isMuted);
+        muteButton.textContent = isMuted ? 'Включить микрофон' : 'Выключить микрофон';
+    }
+}
+
+// Toggle camera
+function toggleCamera() {
+    if (localStream) {
+        isCameraOff = !isCameraOff;
+        localStream.getVideoTracks().forEach(track => track.enabled = !isCameraOff);
+        cameraButton.textContent = isCameraOff ? 'Включить камеру' : 'Выключить камеру';
+    }
 }
