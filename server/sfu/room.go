@@ -45,7 +45,7 @@ func (room *Room) RemovePeer(peer_id string) {
 	room.mutex.Lock()
 	defer func() {
 		room.mutex.Unlock()
-		// room.Signal()
+		room.Signal()
 	}()
 
 	delete(room.peers, peer_id)
@@ -55,7 +55,7 @@ func (room *Room) AddTrack(track *webrtc.TrackRemote) *webrtc.TrackLocalStaticRT
 	room.mutex.Lock()
 	defer func() {
 		room.mutex.Unlock()
-		// room.Signal()
+		room.Signal()
 	}()
 	trackLocal, err := webrtc.NewTrackLocalStaticRTP(track.Codec().RTPCodecCapability, track.ID(), track.StreamID())
 	if err != nil {
@@ -71,7 +71,7 @@ func (room *Room) RemoveTrack(track *webrtc.TrackLocalStaticRTP) {
 	room.mutex.Lock()
 	defer func() {
 		room.mutex.Unlock()
-		// room.Signal()
+		room.Signal()
 	}()
 
 	delete(room.tracks, track.ID())
@@ -248,7 +248,7 @@ func (room *Room) Signal() {
 			// Если слишком долго пытаемся синхронизировать - подождём 3 секунды и повторим
 			go func() {
 				time.Sleep(time.Second * 3)
-				// room.Signal()
+				room.Signal()
 			}()
 			return
 		}

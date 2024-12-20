@@ -1,17 +1,18 @@
+// Подключение к SFU-серверу и работа с несколькими участниками
 let wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 let baseHost = window.location.host;
 
-// Connect to SFU endpoint
+// Подключение к SFU
 const sfuUrl = wsProtocol + '//' + baseHost + '/ws';
 
-// Generate unique self ID for this client
+// Генерируем уникальный self_id для этого клиента
 const selfId = "user_" + Math.floor(Math.random() * 10000);
 
-// Default room
+// Комната по умолчанию
 const roomId = "main";
 
 let localVideo = document.getElementById('localVideo');
-let remoteVideo = document.getElementById('remoteVideo');
+let remoteVideosContainer = document.getElementById('remoteVideos');
 let startButton = document.getElementById('startButton');
 let callButton = document.getElementById('callButton');
 let muteButton = document.getElementById('muteButton');
@@ -26,6 +27,9 @@ let sfuSocket = null;
 let isMuted = false;
 let isCameraOff = false;
 
+// Хранить ссылки на видео по stream.id, чтобы не создавать дубликаты
+let remoteStreams = {};
+
 startButton.onclick = start;
 callButton.onclick = call;
 muteButton.onclick = toggleMute;
@@ -33,15 +37,13 @@ cameraButton.onclick = toggleCamera;
 hangupButton.onclick = hangUp;
 
 async function start() {
-    // Choose source of media: camera or screen
+    // Источник: камера или экран
     let source = videoSourceSelect.value;
 
     try {
         if (source === 'camera') {
-            // Get camera and microphone
             localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         } else if (source === 'screen') {
-            // Get screen sharing stream (some browsers might have restrictions)
             localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
         }
     } catch (err) {
@@ -51,12 +53,11 @@ async function start() {
 
     localVideo.srcObject = localStream;
 
-    // Connect to SFU server
+    // Подключаемся к SFU
     sfuSocket = new WebSocket(sfuUrl);
 
     sfuSocket.onopen = () => {
         console.log("SFU WebSocket connected");
-        // Join room event
         let joinMsg = {
             event: "joinRoom",
             data: {
@@ -69,7 +70,6 @@ async function start() {
 
     sfuSocket.onmessage = (event) => {
         const msg = JSON.parse(event.data);
-        // Handle incoming events: offer, answer, candidate
         switch (msg.event) {
             case "offer":
                 handleOffer(msg.data);
@@ -93,21 +93,30 @@ async function start() {
         console.log("WebSocket closed");
     };
 
-    // Create RTCPeerConnection
+    // Создаём RTCPeerConnection
     pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+        iceServers: [{ urls: "stun:stun.l.google.com:19302"}]
     });
 
-    // Add local tracks to the connection
+    // Добавляем локальные треки в PeerConnection
     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
-    // Handle remote tracks
+    // Обработка входящих треков
     pc.ontrack = (event) => {
         console.log("Got remote track:", event.track);
-        remoteVideo.srcObject = event.streams[0];
+        let stream = event.streams[0];
+        if (!remoteStreams[stream.id]) {
+            // Создаём новый video-элемент для нового потока
+            let video = document.createElement('video');
+            video.autoplay = true;
+            video.playsinline = true;
+            video.srcObject = stream;
+            remoteVideosContainer.appendChild(video);
+            remoteStreams[stream.id] = video;
+        }
     };
 
-    // Send ICE candidates to SFU
+    // Отправляем ICE-кандидаты в SFU
     pc.onicecandidate = (event) => {
         if (event.candidate) {
             console.log("Sending ICE candidate to SFU");
@@ -174,7 +183,6 @@ function handleRemoteICE(candidate) {
     pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e => console.error("Error adding ICE:", e));
 }
 
-// Toggle microphone
 function toggleMute() {
     if (localStream) {
         isMuted = !isMuted;
@@ -183,7 +191,6 @@ function toggleMute() {
     }
 }
 
-// Toggle camera (в случае захвата экрана, это будет выключать стрим экрана)
 function toggleCamera() {
     if (localStream) {
         isCameraOff = !isCameraOff;
@@ -195,29 +202,35 @@ function toggleCamera() {
 function hangUp() {
     console.log("Ending call");
 
-    // Close WebRTC connection
+    // Закрываем PeerConnection
     if (pc) {
         pc.close();
         pc = null;
     }
 
-    // Close WebSocket connection
+    // Закрываем WebSocket
     if (sfuSocket) {
         sfuSocket.close();
         sfuSocket = null;
     }
 
-    // Stop local stream
+    // Останавливаем локальный стрим
     if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
         localStream = null;
     }
 
-    // Reset UI
+    // Чистим интерфейс
     localVideo.srcObject = null;
-    remoteVideo.srcObject = null;
     callButton.disabled = true;
     muteButton.disabled = true;
     cameraButton.disabled = true;
     hangupButton.disabled = true;
+
+    // Удаляем все удалённые видео
+    for (let streamId in remoteStreams) {
+        let video = remoteStreams[streamId];
+        remoteVideosContainer.removeChild(video);
+    }
+    remoteStreams = {};
 }
