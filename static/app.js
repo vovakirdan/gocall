@@ -1,8 +1,14 @@
-let wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+let wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 let baseHost = window.location.host;
 
-const signalingUrl = wsProtocol + '//' + baseHost + '/signal';
-const roomId = "main"; // For testing, both clients use the same roomId
+// Connect to SFU endpoint
+const sfuUrl = wsProtocol + '//' + baseHost + '/ws';
+
+// Generate unique self ID for this client
+const selfId = "user_" + Math.floor(Math.random() * 10000);
+
+// Default room
+const roomId = "main";
 
 let localVideo = document.getElementById('localVideo');
 let remoteVideo = document.getElementById('remoteVideo');
@@ -15,7 +21,7 @@ let videoSourceSelect = document.getElementById('videoSource');
 
 let localStream = null;
 let pc = null;
-let signalingSocket = null;
+let sfuSocket = null;
 
 let isMuted = false;
 let isCameraOff = false;
@@ -27,14 +33,15 @@ cameraButton.onclick = toggleCamera;
 hangupButton.onclick = hangUp;
 
 async function start() {
-    // Выбираем источник видео:
-    let source = videoSourceSelect.value; // "camera" или "screen"
+    // Choose source of media: camera or screen
+    let source = videoSourceSelect.value;
 
     try {
         if (source === 'camera') {
+            // Get camera and microphone
             localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         } else if (source === 'screen') {
-            // В некоторых браузерах надо будет убрать audio: true
+            // Get screen sharing stream (some browsers might have restrictions)
             localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
         }
     } catch (err) {
@@ -44,57 +51,75 @@ async function start() {
 
     localVideo.srcObject = localStream;
 
-    // init websocket for signaling
-    signalingSocket = new WebSocket(signalingUrl);
+    // Connect to SFU server
+    sfuSocket = new WebSocket(sfuUrl);
 
-    signalingSocket.onopen = () => {
-        console.log("WebSocket connected");
-        // Join the room
-        signalingSocket.send(JSON.stringify({ type: "join", roomId: roomId }));
+    sfuSocket.onopen = () => {
+        console.log("SFU WebSocket connected");
+        // Join room event
+        let joinMsg = {
+            event: "joinRoom",
+            data: {
+                self_id: selfId,
+                room_id: roomId
+            }
+        };
+        sfuSocket.send(JSON.stringify(joinMsg));
     };
 
-    signalingSocket.onmessage = (event) => {
+    sfuSocket.onmessage = (event) => {
         const msg = JSON.parse(event.data);
-        if (msg.type === "offer") {
-            handleOffer(msg.payload);
-        } else if (msg.type === "answer") {
-            handleAnswer(msg.payload);
-        } else if (msg.type === "ice") {
-            handleRemoteICE(msg.payload);
+        // Handle incoming events: offer, answer, candidate
+        switch (msg.event) {
+            case "offer":
+                handleOffer(msg.data);
+                break;
+            case "answer":
+                handleAnswer(msg.data);
+                break;
+            case "candidate":
+                handleRemoteICE(msg.data);
+                break;
+            default:
+                console.log("Unknown event:", msg.event);
         }
     };
 
-    signalingSocket.onerror = (err) => {
-        console.error("webSocket error:", err);   
+    sfuSocket.onerror = (err) => {
+        console.error("WebSocket error:", err);   
     };
 
-    signalingSocket.onclose = () => {
+    sfuSocket.onclose = () => {
         console.log("WebSocket closed");
     };
 
-    // create RTCPeerConnection
+    // Create RTCPeerConnection
     pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302"}]
-    })
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+    });
 
-    // add all tracks from localStream to RTCPeerConnection
+    // Add local tracks to the connection
     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
-    // Handle incoming video
+    // Handle remote tracks
     pc.ontrack = (event) => {
         console.log("Got remote track:", event.track);
         remoteVideo.srcObject = event.streams[0];
     };
 
-    // sending ICE candidates to WebSocket
+    // Send ICE candidates to SFU
     pc.onicecandidate = (event) => {
         if (event.candidate) {
-            console.log("Sending ICE candidate to remote");
-            signalingSocket.send(JSON.stringify({
-                type: "ice",
-                roomId: roomId,
-                payload: event.candidate
-            }));
+            console.log("Sending ICE candidate to SFU");
+            let candidateMsg = {
+                event: "ice-candidate",
+                data: {
+                    self_id: selfId,
+                    room_id: roomId,
+                    candidate: event.candidate.toJSON()
+                }
+            };
+            sfuSocket.send(JSON.stringify(candidateMsg));
         }
     };
 
@@ -109,23 +134,16 @@ async function call() {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
-    console.log("Sending Offer to server via WebSocket");
-    signalingSocket.send(JSON.stringify({
-        type: "offer",
-        roomId: roomId,
-        payload: offer
-    }));
-
-    if (!response.ok) {
-        console.error("Failed to get answer from server");
-        return;
-    }
-
-    let answer = await response.json();
-    console.log("Got Answer from server:", answer);
-
-    await pc.setRemoteDescription(answer);
-    console.log("Remote SDP set successfully");
+    console.log("Sending Offer to SFU via WebSocket");
+    let offerMsg = {
+        event: "offer",
+        data: {
+            self_id: selfId,
+            room_id: roomId,
+            offer: offer
+        }
+    };
+    sfuSocket.send(JSON.stringify(offerMsg));
 }
 
 async function handleOffer(offer) {
@@ -134,12 +152,16 @@ async function handleOffer(offer) {
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 
-    console.log("Sending answer back to initiator");
-    signalingSocket.send(JSON.stringify({
-        type: "answer",
-        roomId: roomId,
-        payload: answer
-    }));
+    console.log("Sending answer back to SFU");
+    let answerMsg = {
+        event: "answer",
+        data: {
+            self_id: selfId,
+            room_id: roomId,
+            answer: answer
+        }
+    };
+    sfuSocket.send(JSON.stringify(answerMsg));
 }
 
 async function handleAnswer(answer) {
@@ -149,7 +171,7 @@ async function handleAnswer(answer) {
 
 function handleRemoteICE(candidate) {
     console.log("Received ICE candidate");
-    pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e=>console.error("Error adding ICE:", e));
+    pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e => console.error("Error adding ICE:", e));
 }
 
 // Toggle microphone
@@ -180,9 +202,9 @@ function hangUp() {
     }
 
     // Close WebSocket connection
-    if (signalingSocket) {
-        signalingSocket.close();
-        signalingSocket = null;
+    if (sfuSocket) {
+        sfuSocket.close();
+        sfuSocket = null;
     }
 
     // Stop local stream

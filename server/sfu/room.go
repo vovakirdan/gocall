@@ -78,81 +78,81 @@ func (room *Room) RemoveTrack(track *webrtc.TrackLocalStaticRTP) {
 }
 
 func (room *Room) SendAnswer(message webrtc.SessionDescription, peer_id string) {
-	room.mutex.RLock()
-	peer, ok := room.peers[peer_id]
-	room.mutex.RUnlock()
-	if !ok || peer.socket == nil {
-		fmt.Println("Peer not found or no socket:", peer_id)
-		return
-	}
+    room.mutex.RLock()
+    peer, ok := room.peers[peer_id]
+    room.mutex.RUnlock()
+    if !ok {
+        fmt.Println("Peer not found:", peer_id)
+        return
+    }
 
-	raw, err := json.Marshal(message)
-	if err != nil {
-		fmt.Println("Failed to marshal answer:", err)
-		return
-	}
+    raw, err := json.Marshal(message)
+    if err != nil {
+        fmt.Println("Failed to marshal answer:", err)
+        return
+    }
 
-	msg := WsMessage{Event: "answer", Data: json.RawMessage(raw)}
-	if err := peer.socket.WriteJSON(msg); err != nil {
-		fmt.Println("Failed to send answer:", err)
-	}
+    msg := WsMessage{Event: "answer", Data: json.RawMessage(raw)}
+    if err := peer.WriteJSON(msg); err != nil {
+        fmt.Println("Failed to send answer:", err)
+    }
 }
 
 func (room *Room) SendOffer(message webrtc.SessionDescription, peer_id string) {
-	room.mutex.RLock()
-	peer, ok := room.peers[peer_id]
-	room.mutex.RUnlock()
-	if !ok || peer.socket == nil {
-		fmt.Println("Peer not found or no socket:", peer_id)
-		return
-	}
+    room.mutex.RLock()
+    peer, ok := room.peers[peer_id]
+    room.mutex.RUnlock()
+    if !ok {
+        fmt.Println("Peer not found:", peer_id)
+        return
+    }
 
-	raw, err := json.Marshal(message)
-	if err != nil {
-		fmt.Println("Failed to marshal offer:", err)
-		return
-	}
+    raw, err := json.Marshal(message)
+    if err != nil {
+        fmt.Println("Failed to marshal offer:", err)
+        return
+    }
 
-	msg := WsMessage{Event: "offer", Data: json.RawMessage(raw)}
-	if err := peer.socket.WriteJSON(msg); err != nil {
-		fmt.Println("Failed to send offer:", err)
-	}
+    msg := WsMessage{Event: "offer", Data: json.RawMessage(raw)}
+    if err := peer.WriteJSON(msg); err != nil {
+        fmt.Println("Failed to send offer:", err)
+    }
 }
 
-func (room *Room) SendICE(candidate *webrtc.ICECandidate, peer_id string) {
-	room.mutex.RLock()
-	peer, ok := room.peers[peer_id]
-	room.mutex.RUnlock()
-	if !ok || peer.socket == nil {
-		fmt.Println("Peer not found or no socket:", peer_id)
-		return
-	}
+func (room *Room) SendICE(message *webrtc.ICECandidate, peer_id string) {
+    room.mutex.RLock()
+    peer, ok := room.peers[peer_id]
+    room.mutex.RUnlock()
+    if !ok {
+        fmt.Println("Peer not found:", peer_id)
+        return
+    }
 
-	iceJSON := candidate.ToJSON()
-	raw, err := json.Marshal(iceJSON)
-	if err != nil {
-		fmt.Println("Failed to marshal ICE candidate:", err)
-		return
-	}
+    iceJSON := message.ToJSON()
+    raw, err := json.Marshal(iceJSON)
+    if err != nil {
+        fmt.Println("Failed to marshal ICE candidate:", err)
+        return
+    }
 
-	fmt.Println("SENDED |ICE|: ", iceJSON)
-	msg := WsMessage{Event: "candidate", Data: json.RawMessage(raw)}
-	if err := peer.socket.WriteJSON(msg); err != nil {
-		fmt.Println("Failed to send ICE candidate:", err)
-	}
+    fmt.Println("SENDED |ICE|: ", iceJSON)
+    msg := WsMessage{Event: "candidate", Data: json.RawMessage(raw)}
+    if err := peer.WriteJSON(msg); err != nil {
+        fmt.Println("Failed to send ICE candidate:", err)
+    }
 }
 
 func (room *Room) BroadCast(message WsMessage, self_id string) {
-	room.mutex.RLock()
-	defer room.mutex.RUnlock()
+    room.mutex.RLock()
+    defer room.mutex.RUnlock()
 
-	for _, rec := range room.peers {
-		if rec.id != self_id {
-			if err := rec.socket.WriteJSON(message); err != nil {
-				fmt.Println(err)
-			}
-		}
-	}
+    for _, rec := range room.peers {
+        if rec.id != self_id {
+            if err := rec.WriteJSON(message); err != nil {
+                fmt.Println("Broadcast error:", err)
+            }
+        }
+    }
 }
 
 func (room *Room) JoinRoom(id string) {
