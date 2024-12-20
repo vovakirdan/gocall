@@ -26,13 +26,13 @@ var (
 )
 
 // websocket 
-var upgrader = websocket.Upgrader{
+var signalUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
 // HandleSignal handles signaling WebSocket connections
 func HandleSignal(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := signalUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("Error upgrading HTTP to WebSocket:", err)
 		return
