@@ -2,7 +2,6 @@ let wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
 let baseHost = window.location.host;
 
 const signalingUrl = wsProtocol + '//' + baseHost + '/signal';
-const webrtcUrl = window.location.origin + '/webrtc';
 const roomId = "main"; // For testing, both clients use the same roomId
 
 let localVideo = document.getElementById('localVideo');
@@ -11,6 +10,7 @@ let startButton = document.getElementById('startButton');
 let callButton = document.getElementById('callButton');
 let muteButton = document.getElementById('muteButton');
 let cameraButton = document.getElementById('cameraButton');
+let hangupButton = document.getElementById('hangupButton');
 let videoSourceSelect = document.getElementById('videoSource');
 
 let localStream = null;
@@ -24,6 +24,7 @@ startButton.onclick = start;
 callButton.onclick = call;
 muteButton.onclick = toggleMute;
 cameraButton.onclick = toggleCamera;
+hangupButton.onclick = hangUp;
 
 async function start() {
     // Выбираем источник видео:
@@ -100,6 +101,7 @@ async function start() {
     callButton.disabled = false;
     muteButton.disabled = false;
     cameraButton.disabled = false;
+    hangupButton.disabled = false;
 }
 
 async function call() {
@@ -155,7 +157,7 @@ function toggleMute() {
     if (localStream) {
         isMuted = !isMuted;
         localStream.getAudioTracks().forEach(track => track.enabled = !isMuted);
-        muteButton.textContent = isMuted ? 'Включить микрофон' : 'Выключить микрофон';
+        muteButton.textContent = isMuted ? 'Enable microphone' : 'Disable microphone';
     }
 }
 
@@ -164,6 +166,36 @@ function toggleCamera() {
     if (localStream) {
         isCameraOff = !isCameraOff;
         localStream.getVideoTracks().forEach(track => track.enabled = !isCameraOff);
-        cameraButton.textContent = isCameraOff ? 'Включить камеру/экран' : 'Выключить камеру/экран';
+        cameraButton.textContent = isCameraOff ? 'Turn on camera/screen' : 'Turn off camera/screen';
     }
+}
+
+function hangUp() {
+    console.log("Ending call");
+
+    // Close WebRTC connection
+    if (pc) {
+        pc.close();
+        pc = null;
+    }
+
+    // Close WebSocket connection
+    if (signalingSocket) {
+        signalingSocket.close();
+        signalingSocket = null;
+    }
+
+    // Stop local stream
+    if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+        localStream = null;
+    }
+
+    // Reset UI
+    localVideo.srcObject = null;
+    remoteVideo.srcObject = null;
+    callButton.disabled = true;
+    muteButton.disabled = true;
+    cameraButton.disabled = true;
+    hangupButton.disabled = true;
 }
