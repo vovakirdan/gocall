@@ -102,7 +102,7 @@ func (coordinator *Coordinator) AddUserToRoom(selfID string, roomID string, sock
 
         peer.connection.OnTrack(func(t *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
             fmt.Println("Track added from peer: ", selfID)
-            defer room.Signal()
+            // defer room.Signal()
             // Create a track to fan out our incoming video to all peers
             trackLocal := room.AddTrack(t)
             defer room.RemoveTrack(trackLocal)
