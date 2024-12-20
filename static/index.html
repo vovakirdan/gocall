@@ -44,6 +44,7 @@
             flex-direction: row;
             gap: 10px;
             margin-bottom: 20px;
+            align-items: center;
         }
 
         button {
@@ -63,6 +64,14 @@
         button:hover:enabled {
             background: #0056b3;
         }
+
+        select {
+            padding: 5px;
+            border-radius: 6px;
+            border: 1px solid #ccc;
+            background: #fff;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
@@ -72,6 +81,10 @@
         <video id="remoteVideo" autoplay playsinline></video>
     </div>
     <div class="controls">
+        <select id="videoSource">
+            <option value="camera">Камера</option>
+            <option value="screen">Экран</option>
+        </select>
         <button id="startButton">Start</button>
         <button id="callButton" disabled>Call</button>
         <button id="muteButton" disabled>Выключить микрофон</button>

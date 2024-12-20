@@ -2,7 +2,7 @@ let wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
 let baseHost = window.location.host;
 
 const signalingUrl = wsProtocol + '//' + baseHost + '/signal';
-const webrtcUrl = window.location.origin + '/webrtc';  // (Если используете для HTTP сигналинга, сейчас остается для справки)
+const webrtcUrl = window.location.origin + '/webrtc';
 const roomId = "main"; // For testing, both clients use the same roomId
 
 let localVideo = document.getElementById('localVideo');
@@ -11,6 +11,7 @@ let startButton = document.getElementById('startButton');
 let callButton = document.getElementById('callButton');
 let muteButton = document.getElementById('muteButton');
 let cameraButton = document.getElementById('cameraButton');
+let videoSourceSelect = document.getElementById('videoSource');
 
 let localStream = null;
 let pc = null;
@@ -25,8 +26,21 @@ muteButton.onclick = toggleMute;
 cameraButton.onclick = toggleCamera;
 
 async function start() {
-    // ask for local mediastream (camera + microphone)
-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    // Выбираем источник видео:
+    let source = videoSourceSelect.value; // "camera" или "screen"
+
+    try {
+        if (source === 'camera') {
+            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        } else if (source === 'screen') {
+            // В некоторых браузерах надо будет убрать audio: true
+            localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+        }
+    } catch (err) {
+        console.error("Failed to get media:", err);
+        return;
+    }
+
     localVideo.srcObject = localStream;
 
     // init websocket for signaling
@@ -145,11 +159,11 @@ function toggleMute() {
     }
 }
 
-// Toggle camera
+// Toggle camera (в случае захвата экрана, это будет выключать стрим экрана)
 function toggleCamera() {
     if (localStream) {
         isCameraOff = !isCameraOff;
         localStream.getVideoTracks().forEach(track => track.enabled = !isCameraOff);
-        cameraButton.textContent = isCameraOff ? 'Включить камеру' : 'Выключить камеру';
+        cameraButton.textContent = isCameraOff ? 'Включить камеру/экран' : 'Выключить камеру/экран';
     }
 }
