@@ -25,6 +25,8 @@ type Peer struct {
     socket     *websocket.Conn
     mutex      sync.RWMutex
     writeMutex sync.Mutex // Для сериализации записей
+    iceCandidateBuffer []*webrtc.ICECandidateInit
+    remoteDescSet bool
 }
 
 func newPeer(id string) *Peer {
@@ -66,8 +68,16 @@ func (peer *Peer) ReactOnOffer(offer webrtc.SessionDescription) (webrtc.SessionD
         fmt.Println("Failed to set remote description for peer", peer.id, ":", err)
         return webrtc.SessionDescription{}, err
     }
+    peer.remoteDescSet = true
     fmt.Println("Remote Description was set for peer", peer.id)
 
+    for _, candidate := range peer.iceCandidateBuffer {
+        if err := peer.connection.AddICECandidate(*candidate); err != nil {
+            fmt.Println("Failed to add buffered ICE candidate:", err)
+        }
+    }
+
+    peer.iceCandidateBuffer = nil
     answer, err := peer.connection.CreateAnswer(nil)
     if err != nil {
         fmt.Println("Failed to create answer for peer", peer.id, ":", err)
@@ -82,6 +92,18 @@ func (peer *Peer) ReactOnOffer(offer webrtc.SessionDescription) (webrtc.SessionD
     fmt.Println("Answer was created in peer", peer.id)
 
     return *peer.connection.LocalDescription(), nil
+}
+
+func (peer *Peer) AddICECandidate(candidate webrtc.ICECandidateInit) error {
+    peer.mutex.Lock()
+    defer peer.mutex.Unlock()
+
+    if peer.remoteDescSet {
+        return peer.connection.AddICECandidate(candidate)
+    } else {
+        peer.iceCandidateBuffer = append(peer.iceCandidateBuffer, &candidate)
+        return nil
+    }
 }
 
 func (peer *Peer) ReactOnAnswer(answer webrtc.SessionDescription) error {

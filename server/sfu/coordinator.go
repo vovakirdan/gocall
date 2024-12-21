@@ -54,7 +54,13 @@ func (coordinator *Coordinator) AddUserToRoom(selfID string, roomID string, sock
     peer.SetSocket(socket)
 
     // Create Peer Connection
-    conn, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+    conn, err := webrtc.NewPeerConnection(webrtc.Configuration{
+        ICEServers: []webrtc.ICEServer{
+            {
+                URLs: []string{"stun:stun.l.google.com:19302"},
+            },
+        },
+    })
     if err != nil {
         fmt.Println("Failed to establish peer connection")
         return
@@ -66,7 +72,7 @@ func (coordinator *Coordinator) AddUserToRoom(selfID string, roomID string, sock
     // Accept one audio and one video track incoming
     for _, typ := range []webrtc.RTPCodecType{webrtc.RTPCodecTypeVideo, webrtc.RTPCodecTypeAudio} {
         if _, err := peer.connection.AddTransceiverFromKind(typ, webrtc.RTPTransceiverInit{
-            Direction: webrtc.RTPTransceiverDirectionRecvonly,
+            Direction: webrtc.RTPTransceiverDirectionSendrecv,
         }); err != nil {
             log.Print(err)
             return
@@ -201,20 +207,15 @@ func (coordinator *Coordinator) ObtainEvent(message WsMessage, socket *websocket
             return
         }
 
-        // Отправляем ICECandidateInit всем пирами кроме отправителя
-        room.mutex.RLock()
-        for _, peer := range room.peers {
-            if peer.id != candidate.SelfID {
-                sendCandidate := WsMessage{
-                    Event: "candidate",
-                    Data:  json.RawMessage(toJSONStringIce(candidate.Candidate)),
-                }
-                if err := peer.WriteJSON(sendCandidate); err != nil {
-                    fmt.Println("Failed to send ICE candidate to peer:", peer.id, ":", err)
-                }
-            }
+        peer, exists := room.peers[candidate.SelfID]
+        if !exists {
+            fmt.Println("Peer not found:", candidate.SelfID)
+            return
         }
-        room.mutex.RUnlock()
+
+        if err := peer.AddICECandidate(candidate.Candidate); err != nil {
+            fmt.Println("Failed to add ICE candidate:", err)
+        }
     default:
         fmt.Println("Unknown event:", message.Event)
     }

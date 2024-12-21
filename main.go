@@ -22,11 +22,11 @@ func main() {
     keyFile := fmt.Sprintf("%s-key.pem", *ip)
 
     // Инициализация WebRTC (старая логика P2P)
-    server.InitWebRTC()
+    // server.InitWebRTC()
 
-    // Маршруты старой логики P2P
-    http.HandleFunc("/signal", server.HandleSignal)
-    http.HandleFunc("/webrtc", server.HandleWebRTC)
+    // // Маршруты старой логики P2P
+    // http.HandleFunc("/signal", server.HandleSignal)
+    // http.HandleFunc("/webrtc", server.HandleWebRTC)
 
     // Инициализация WS сервера для SFU логики
     server.InitWsServer()

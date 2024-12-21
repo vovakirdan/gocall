@@ -80,6 +80,11 @@ func (room *Room) SendAnswer(message webrtc.SessionDescription, peer_id string) 
         return
     }
 
+	if err := peer.ReactOnAnswer(message); err != nil {
+        fmt.Println("Failed to set remote description (answer):", err)
+        return
+    }
+
     raw, err := json.Marshal(message)
     if err != nil {
         fmt.Println("Failed to marshal answer:", err)
