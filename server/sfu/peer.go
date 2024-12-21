@@ -24,7 +24,7 @@ type Peer struct {
     streams    map[string]*webrtc.TrackRemote
     socket     *websocket.Conn
     mutex      sync.RWMutex
-    writeMutex sync.Mutex // Для записи в socket
+    writeMutex sync.Mutex // Для сериализации записей
 }
 
 func newPeer(id string) *Peer {
@@ -96,13 +96,23 @@ func (peer *Peer) ReactOnAnswer(answer webrtc.SessionDescription) error {
     return nil
 }
 
+// WriteJSON записывает JSON сообщение в WebSocket соединение пира в потокобезопасном режиме.
 func (peer *Peer) WriteJSON(v interface{}) error {
     peer.writeMutex.Lock()
     defer peer.writeMutex.Unlock()
+
+    peer.mutex.RLock()
+    defer peer.mutex.RUnlock()
 
     if peer.socket == nil {
         return fmt.Errorf("no socket for peer %s", peer.id)
     }
 
-    return peer.socket.WriteJSON(v)
+    err := peer.socket.WriteJSON(v)
+    if err != nil {
+        // Обработка ошибки, возможно, удаление пира из комнаты
+        fmt.Printf("Error writing JSON to peer %s: %v\n", peer.id, err)
+        // peer.socket = nil
+    }
+    return err
 }

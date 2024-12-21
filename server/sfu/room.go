@@ -16,7 +16,10 @@ type Session interface {
 	AddTrack(track *webrtc.TrackRemote) *webrtc.TrackLocalStaticRTP
 	RemoveTrack(track *webrtc.TrackLocalStaticRTP)
 	SendAnswer(message webrtc.SessionDescription, peer_id string)
-	Signal()
+	SendOffer(message webrtc.SessionDescription, peer_id string)
+    SendICE(message *webrtc.ICECandidate, peer_id string)
+    Broadcast(message WsMessage, self_id string)
+	Signal()  // removed temp
 }
 
 type Room struct {
@@ -27,12 +30,12 @@ type Room struct {
 }
 
 func NewRoom(id string) *Room {
-	return &Room{
-		id:     id,
-		mutex:  sync.RWMutex{},
-		peers:  map[string]*Peer{},
-		tracks: map[string]*webrtc.TrackLocalStaticRTP{},
-	}
+    return &Room{
+        id:     id,
+        mutex:  sync.RWMutex{},
+        peers:  make(map[string]*Peer),
+        tracks: make(map[string]*webrtc.TrackLocalStaticRTP),
+    }
 }
 
 func (room *Room) AddPeer(peer *Peer) {
@@ -43,20 +46,14 @@ func (room *Room) AddPeer(peer *Peer) {
 
 func (room *Room) RemovePeer(peer_id string) {
 	room.mutex.Lock()
-	defer func() {
-		room.mutex.Unlock()
-		room.Signal()
-	}()
+	defer room.mutex.Unlock()
 
 	delete(room.peers, peer_id)
 }
 
 func (room *Room) AddTrack(track *webrtc.TrackRemote) *webrtc.TrackLocalStaticRTP {
 	room.mutex.Lock()
-	defer func() {
-		room.mutex.Unlock()
-		room.Signal()
-	}()
+	defer room.mutex.Unlock()
 	trackLocal, err := webrtc.NewTrackLocalStaticRTP(track.Codec().RTPCodecCapability, track.ID(), track.StreamID())
 	if err != nil {
 		panic(err)
@@ -69,10 +66,7 @@ func (room *Room) AddTrack(track *webrtc.TrackRemote) *webrtc.TrackLocalStaticRT
 
 func (room *Room) RemoveTrack(track *webrtc.TrackLocalStaticRTP) {
 	room.mutex.Lock()
-	defer func() {
-		room.mutex.Unlock()
-		room.Signal()
-	}()
+	defer room.mutex.Unlock()
 
 	delete(room.tracks, track.ID())
 }
@@ -155,12 +149,14 @@ func (room *Room) BroadCast(message WsMessage, self_id string) {
     }
 }
 
+// unused
 func (room *Room) JoinRoom(id string) {
 	room.mutex.Lock()
 	defer room.mutex.Unlock()
 	room.peers[id] = newPeer(id)
 }
 
+// unused
 func (room *Room) Signal() {
 	room.mutex.Lock()
 	defer room.mutex.Unlock()
