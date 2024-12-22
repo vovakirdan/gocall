@@ -21,6 +21,7 @@ type PeerInterface interface {
 type Peer struct {
     id         string
     connection *webrtc.PeerConnection
+    pendingICE []webrtc.ICECandidateInit
     streams    map[string]*webrtc.TrackRemote
     socket     *websocket.Conn
     mutex      sync.RWMutex
@@ -32,6 +33,19 @@ func newPeer(id string) *Peer {
         id:      id,
         streams: make(map[string]*webrtc.TrackRemote),
     }
+}
+
+func (peer *Peer) AddPendingICE(candidate webrtc.ICECandidateInit) {
+    peer.pendingICE = append(peer.pendingICE, candidate)
+}
+
+func (peer *Peer) FlushPendingICE() {
+    for _, candidate := range peer.pendingICE {
+        if err := peer.connection.AddICECandidate(candidate); err != nil {
+            fmt.Println("Failed to add pending ICE candidate:", err)
+        }
+    }
+    peer.pendingICE = nil
 }
 
 func (peer *Peer) SetPeerConnection(conn *webrtc.PeerConnection) {
@@ -62,18 +76,25 @@ func (peer *Peer) ReactOnOffer(offer webrtc.SessionDescription) (webrtc.SessionD
     peer.mutex.Lock()
     defer peer.mutex.Unlock()
 
+    // Установка RemoteDescription
     if err := peer.connection.SetRemoteDescription(offer); err != nil {
         fmt.Println("Failed to set remote description for peer", peer.id, ":", err)
         return webrtc.SessionDescription{}, err
     }
     fmt.Println("Remote Description was set for peer", peer.id)
 
+    // Очистка очереди ICE-кандидатов
+    fmt.Println("Flushing pending ICE candidates for peer", peer.id)
+    peer.FlushPendingICE()
+
+    // Создание ответа (answer)
     answer, err := peer.connection.CreateAnswer(nil)
     if err != nil {
         fmt.Println("Failed to create answer for peer", peer.id, ":", err)
         return webrtc.SessionDescription{}, err
     }
 
+    // Установка LocalDescription
     if err = peer.connection.SetLocalDescription(answer); err != nil {
         fmt.Println("Failed to set local description for peer", peer.id, ":", err)
         return webrtc.SessionDescription{}, err

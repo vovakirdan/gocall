@@ -37,6 +37,10 @@ cameraButton.onclick = toggleCamera;
 hangupButton.onclick = hangUp;
 
 async function start() {
+    if (!selfId || !roomId) {
+        console.error("selfId or roomId is not defined");
+        return;
+    }    
     // Источник: камера или экран
     let source = videoSourceSelect.value;
 
@@ -66,7 +70,7 @@ async function start() {
             }
         };
         sfuSocket.send(JSON.stringify(joinMsg));
-    };
+    };    
 
     sfuSocket.onmessage = (event) => {
         const msg = JSON.parse(event.data);
@@ -119,18 +123,22 @@ async function start() {
     // Отправляем ICE-кандидаты в SFU
     pc.onicecandidate = (event) => {
         if (event.candidate) {
-            console.log("Sending ICE candidate to SFU");
-            let candidateMsg = {
+            let iceMsg = {
                 event: "ice-candidate",
                 data: {
                     self_id: selfId,
-                    room_id: roomId,
-                    candidate: event.candidate.toJSON()
+                    candidate: event.candidate,
+                    room_id: roomId
                 }
             };
-            sfuSocket.send(JSON.stringify(candidateMsg));
+            console.log("Sending ICE candidate:", iceMsg);
+            sfuSocket.send(JSON.stringify(iceMsg));
         }
-    };
+    };    
+
+    pc.onnegotiationneeded = async () => {
+        console.log("Negotiation needed, signaling state:", pc.signalingState);
+    };    
 
     callButton.disabled = false;
     muteButton.disabled = false;
@@ -155,32 +163,81 @@ async function call() {
     sfuSocket.send(JSON.stringify(offerMsg));
 }
 
+let offerQueue = [];
+
+let pendingCandidates = [];
+
+function handleRemoteICE(candidate) {
+    console.log("Received ICE candidate");
+    if (pc.remoteDescription && pc.remoteDescription.type) {
+        // Если удалённое описание уже установлено, добавляем кандидата
+        pc.addIceCandidate(new RTCIceCandidate(candidate))
+            .then(() => console.log("Added ICE candidate"))
+            .catch((err) => console.error("Error adding ICE:", err));
+    } else {
+        // Сохраняем кандидата в очередь
+        console.log("Queuing ICE candidate until remote description is set");
+        pendingCandidates.push(candidate);
+    }
+}
+
 async function handleOffer(offer) {
     console.log("Received offer");
-    await pc.setRemoteDescription(new RTCSessionDescription(offer));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
+    if (pc.signalingState !== "stable") {
+        console.warn("Queuing offer due to signaling state:", pc.signalingState);
+        offerQueue.push(offer);
+        return;
+    }
 
-    console.log("Sending answer back to SFU");
-    let answerMsg = {
-        event: "answer",
-        data: {
-            self_id: selfId,
-            room_id: roomId,
-            answer: answer
+    try {
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        console.log("Remote description set");
+
+        // Обработка очереди ICE-кандидатов
+        while (pendingCandidates.length > 0) {
+            const candidate = pendingCandidates.shift();
+            try {
+                await pc.addIceCandidate(new RTCIceCandidate(candidate));
+                console.log("Processed pending ICE candidate");
+            } catch (err) {
+                console.error("Error adding pending ICE candidate:", err);
+            }
         }
-    };
-    sfuSocket.send(JSON.stringify(answerMsg));
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        console.log("Local description set and answer created");
+
+        const answerMsg = {
+            event: "answer",
+            data: {
+                self_id: selfId,
+                room_id: roomId,
+                answer: answer
+            }
+        };
+        sfuSocket.send(JSON.stringify(answerMsg));
+
+        // После обработки текущего предложения, обработать очередь
+        if (offerQueue.length > 0) {
+            console.log("Processing queued offer");
+            const nextOffer = offerQueue.shift();
+            await handleOffer(nextOffer);
+        }
+    } catch (err) {
+        console.error("Failed to handle offer:", err);
+    }
 }
 
 async function handleAnswer(answer) {
     console.log("Received answer");
-    await pc.setRemoteDescription(new RTCSessionDescription(answer));
-}
-
-function handleRemoteICE(candidate) {
-    console.log("Received ICE candidate");
-    pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e => console.error("Error adding ICE:", e));
+    if (pc.signalingState === "have-local-offer") {
+        await pc.setRemoteDescription(new RTCSessionDescription(answer))
+            .then(() => console.log("Remote description set"))
+            .catch(err => console.error("Failed to set remote description:", err));
+    } else {
+        console.warn(`Skipping setRemoteDescription in handleAnswer: signaling state is ${pc.signalingState}`);
+    }
 }
 
 function toggleMute() {

@@ -46,6 +46,11 @@ func (coordinator *Coordinator) AddUserToRoom(selfID string, roomID string, sock
     room := coordinator.sessions[roomID]
     coordinator.mutex.Unlock()
 
+    if selfID == "" {
+        fmt.Println("Error: selfID is empty")
+        return
+    }
+
     peer := newPeer(selfID)
     room.AddPeer(peer)
     fmt.Println("Peer ", selfID, "was added to room ", roomID)
@@ -66,7 +71,7 @@ func (coordinator *Coordinator) AddUserToRoom(selfID string, roomID string, sock
     // Accept one audio and one video track incoming
     for _, typ := range []webrtc.RTPCodecType{webrtc.RTPCodecTypeVideo, webrtc.RTPCodecTypeAudio} {
         if _, err := peer.connection.AddTransceiverFromKind(typ, webrtc.RTPTransceiverInit{
-            Direction: webrtc.RTPTransceiverDirectionRecvonly,
+            Direction: webrtc.RTPTransceiverDirectionSendrecv,
         }); err != nil {
             log.Print(err)
             return
@@ -92,9 +97,14 @@ func (coordinator *Coordinator) AddUserToRoom(selfID string, roomID string, sock
             fmt.Println("ICEGatheringState: connected")
             return
         }
-        fmt.Println("Ice: ", i)
-        room.SendICE(i, selfID)
-    })
+    
+        // Преобразуем ICECandidate в ICECandidateInit
+        candidateInit := i.ToJSON()
+        fmt.Println("Ice: ", candidateInit)
+    
+        // Отправляем ICECandidateInit
+        room.SendICE(&candidateInit, selfID)
+    })    
 
     // When a remote track is received, add it to the room
     peer.connection.OnTrack(func(t *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
@@ -149,28 +159,12 @@ func (coordinator *Coordinator) ObtainEvent(message WsMessage, socket *websocket
             fmt.Println("Failed to parse offer data:", err)
             return
         }
-        coordinator.mutex.RLock()
-        room, okRoom := coordinator.sessions[offer.RoomID]
-        coordinator.mutex.RUnlock()
-        if !okRoom {
+        room := coordinator.sessions[offer.RoomID]
+        if room == nil {
             fmt.Println("Room not found:", offer.RoomID)
             return
         }
-
-        // Отправляем offer всем пирами кроме отправителя
-        room.mutex.RLock()
-        for _, peer := range room.peers {
-            if peer.id != offer.SelfID {
-                sendOffer := WsMessage{
-                    Event: "offer",
-                    Data:  json.RawMessage(toJSONString(offer.Offer)),
-                }
-                if err := peer.WriteJSON(sendOffer); err != nil {
-                    fmt.Println("Failed to send offer to peer:", peer.id, ":", err)
-                }
-            }
-        }
-        room.mutex.RUnlock()
+        room.SendOffer(offer.Offer, offer.SelfID)
     case "answer":
         var ans ANSWER
         if err := json.Unmarshal(message.Data, &ans); err != nil {
@@ -188,33 +182,23 @@ func (coordinator *Coordinator) ObtainEvent(message WsMessage, socket *websocket
         // Отправляем answer обратно отправителю offer
         room.SendAnswer(ans.Answer, ans.SelfID)
     case "ice-candidate":
+        fmt.Printf("Raw message: %s\n", message.Data) // Логирование входящих данных
         var candidate CANDIDATE
         if err := json.Unmarshal(message.Data, &candidate); err != nil {
             fmt.Println("Failed to parse candidate data:", err)
             return
         }
-        coordinator.mutex.RLock()
-        room, okRoom := coordinator.sessions[candidate.RoomID]
-        coordinator.mutex.RUnlock()
-        if !okRoom {
+        fmt.Printf("Parsed candidate: %+v\n", candidate)
+        if candidate.SelfID == "" {
+            fmt.Println("Error: peer_id is empty in ice-candidate event")
+            return
+        }
+        room := coordinator.sessions[candidate.RoomID]
+        if room == nil {
             fmt.Println("Room not found:", candidate.RoomID)
             return
         }
-
-        // Отправляем ICECandidateInit всем пирами кроме отправителя
-        room.mutex.RLock()
-        for _, peer := range room.peers {
-            if peer.id != candidate.SelfID {
-                sendCandidate := WsMessage{
-                    Event: "candidate",
-                    Data:  json.RawMessage(toJSONStringIce(candidate.Candidate)),
-                }
-                if err := peer.WriteJSON(sendCandidate); err != nil {
-                    fmt.Println("Failed to send ICE candidate to peer:", peer.id, ":", err)
-                }
-            }
-        }
-        room.mutex.RUnlock()
+        room.SendICE(&candidate.Candidate, candidate.SelfID)        
     default:
         fmt.Println("Unknown event:", message.Event)
     }

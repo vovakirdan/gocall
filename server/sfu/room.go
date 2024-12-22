@@ -45,10 +45,18 @@ func (room *Room) AddPeer(peer *Peer) {
 }
 
 func (room *Room) RemovePeer(peer_id string) {
-	room.mutex.Lock()
-	defer room.mutex.Unlock()
+    room.mutex.Lock()
+    defer room.mutex.Unlock()
 
-	delete(room.peers, peer_id)
+    if peer, ok := room.peers[peer_id]; ok {
+        if peer.connection != nil {
+            _ = peer.connection.Close()
+        }
+        delete(room.peers, peer_id)
+        fmt.Println("Peer removed:", peer_id)
+    } else {
+        fmt.Println("Attempted to remove non-existent peer:", peer_id)
+    }
 }
 
 func (room *Room) AddTrack(track *webrtc.TrackRemote) *webrtc.TrackLocalStaticRTP {
@@ -101,6 +109,12 @@ func (room *Room) SendOffer(message webrtc.SessionDescription, peer_id string) {
         return
     }
 
+    // Проверка состояния сигнализации перед отправкой offer
+    if peer.connection.SignalingState() != webrtc.SignalingStateStable {
+        fmt.Printf("Cannot send offer to peer %s: signaling state is %s\n", peer_id, peer.connection.SignalingState())
+        return
+    }
+
     raw, err := json.Marshal(message)
     if err != nil {
         fmt.Println("Failed to marshal offer:", err)
@@ -113,23 +127,27 @@ func (room *Room) SendOffer(message webrtc.SessionDescription, peer_id string) {
     }
 }
 
-func (room *Room) SendICE(message *webrtc.ICECandidate, peer_id string) {
+func (room *Room) SendICE(message *webrtc.ICECandidateInit, peer_id string) {
     room.mutex.RLock()
     peer, ok := room.peers[peer_id]
     room.mutex.RUnlock()
     if !ok {
-        fmt.Println("Peer not found:", peer_id)
+        fmt.Printf("Peer not found: %s in room: %s\n", peer_id, room.id)
         return
     }
 
-    iceJSON := message.ToJSON()
-    raw, err := json.Marshal(iceJSON)
+    if peer.connection.RemoteDescription() == nil {
+        fmt.Printf("Remote description not set for peer: %s, queuing ICE candidate\n", peer_id)
+        peer.AddPendingICE(*message)
+        return
+    }
+
+    raw, err := json.Marshal(message)
     if err != nil {
         fmt.Println("Failed to marshal ICE candidate:", err)
         return
     }
 
-    fmt.Println("SENDED |ICE|: ", iceJSON)
     msg := WsMessage{Event: "candidate", Data: json.RawMessage(raw)}
     if err := peer.WriteJSON(msg); err != nil {
         fmt.Println("Failed to send ICE candidate:", err)
