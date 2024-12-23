@@ -149,6 +149,17 @@ func (room *Room) BroadCast(message WsMessage, self_id string) {
     }
 }
 
+func (room *Room) BroadcastRTP(track *webrtc.TrackLocalStaticRTP, packet []byte) {
+    room.mutex.RLock()
+    defer room.mutex.RUnlock()
+
+    for _, peer := range room.peers {
+        if _, err := track.Write(packet); err != nil {
+            fmt.Printf("Error relaying RTP packet to peer %s: %v\n", peer.id, err)
+        }
+    }
+}
+
 // unused
 func (room *Room) JoinRoom(id string) {
 	room.mutex.Lock()

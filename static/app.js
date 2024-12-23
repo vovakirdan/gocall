@@ -155,32 +155,96 @@ async function call() {
     sfuSocket.send(JSON.stringify(offerMsg));
 }
 
-async function handleOffer(offer) {
-    console.log("Received offer");
-    await pc.setRemoteDescription(new RTCSessionDescription(offer));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-
-    console.log("Sending answer back to SFU");
-    let answerMsg = {
-        event: "answer",
-        data: {
-            self_id: selfId,
-            room_id: roomId,
-            answer: answer
-        }
-    };
-    sfuSocket.send(JSON.stringify(answerMsg));
-}
-
+let iceQueue = [];
 async function handleAnswer(answer) {
     console.log("Received answer");
-    await pc.setRemoteDescription(new RTCSessionDescription(answer));
+
+    // Пропускаем, если состояние уже стабильно
+    if (pc.signalingState === "stable") {
+        console.warn("Signaling state is already stable - skipping remoteDescription setup.");
+        return;
+    }
+
+    if (pc.signalingState !== "have-local-offer") {
+        console.warn("Unexpected signaling state:", pc.signalingState, "- skipping remoteDescription setup.");
+        return;
+    }
+
+    try {
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        console.log("Remote description set successfully");
+
+        // Обрабатываем очередь ICE-кандидатов
+        console.log("Processing queued ICE candidates");
+        iceQueue.forEach(candidate => {
+            pc.addIceCandidate(new RTCIceCandidate(candidate))
+                .then(() => console.log("Successfully added ICE candidate"))
+                .catch(e => console.error("Error adding ICE:", e));
+        });
+        iceQueue = [];
+    } catch (error) {
+        console.error("Failed to set remote description:", error);
+    }
 }
 
 function handleRemoteICE(candidate) {
     console.log("Received ICE candidate");
-    pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e => console.error("Error adding ICE:", e));
+
+    // Добавляем ICE-кандидаты только при установленном remoteDescription
+    if (pc.remoteDescription && (pc.signalingState === "stable" || pc.signalingState === "have-remote-offer")) {
+        pc.addIceCandidate(new RTCIceCandidate(candidate))
+            .then(() => console.log("Successfully added ICE candidate"))
+            .catch(e => console.error("Error adding ICE:", e));
+    } else {
+        console.log("Queueing ICE candidate due to signaling state:", pc.signalingState);
+        iceQueue.push(candidate);
+    }
+}
+
+async function handleOffer(offer) {
+    console.log("Received offer");
+
+    // Если текущее состояние signalingState не позволяет обработать offer
+    if (pc.signalingState === "have-local-offer") {
+        console.warn("Unexpected signaling state: have-local-offer - rolling back current offer.");
+        try {
+            // Используем rollback для отмены текущего предложения
+            await pc.setLocalDescription({ type: "rollback" });
+            console.log("Rolled back local offer successfully.");
+        } catch (error) {
+            console.error("Failed to rollback local offer:", error);
+            return;
+        }
+    } else if (pc.signalingState !== "stable") {
+        console.warn("Unexpected signaling state:", pc.signalingState, "- skipping offer handling.");
+        return;
+    }
+
+    try {
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        console.log("Remote description set successfully");
+
+        // Обрабатываем очередь ICE-кандидатов
+        console.log("Processing queued ICE candidates");
+        iceQueue.forEach(candidate => handleRemoteICE(candidate));
+        iceQueue = [];
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        console.log("Sending answer back to SFU");
+        let answerMsg = {
+            event: "answer",
+            data: {
+                self_id: selfId,
+                room_id: roomId,
+                answer: answer
+            }
+        };
+        sfuSocket.send(JSON.stringify(answerMsg));
+    } catch (error) {
+        console.error("Failed to handle offer:", error);
+    }
 }
 
 function toggleMute() {

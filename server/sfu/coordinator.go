@@ -76,15 +76,13 @@ func (coordinator *Coordinator) AddUserToRoom(selfID string, roomID string, sock
     // If PeerConnection is closed remove it from room
     peer.connection.OnConnectionStateChange(func(p webrtc.PeerConnectionState) {
         switch p {
-        case webrtc.PeerConnectionStateFailed:
-            if err := peer.connection.Close(); err != nil {
-                log.Print(err)
-            }
-        case webrtc.PeerConnectionStateClosed:
-            room.RemovePeer(peer.id)
-        default:
+        case webrtc.PeerConnectionStateConnected:
+            fmt.Printf("Peer %s connected successfully\n", selfID)
+        case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateDisconnected, webrtc.PeerConnectionStateClosed:
+            fmt.Printf("Peer %s disconnected\n", selfID)
+            room.RemovePeer(selfID)
         }
-    })
+    })    
 
     // When PeerConnection gets ICE candidates, send them to the client
     peer.connection.OnICECandidate(func(i *webrtc.ICECandidate) {
@@ -98,24 +96,22 @@ func (coordinator *Coordinator) AddUserToRoom(selfID string, roomID string, sock
 
     // When a remote track is received, add it to the room
     peer.connection.OnTrack(func(t *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-        fmt.Println("Track added from peer: ", selfID)
-        // Добавляем трек в комнату
+        fmt.Println("Track added from peer:", selfID)
         trackLocal := room.AddTrack(t)
+        go room.Signal()
         defer room.RemoveTrack(trackLocal)
-        fmt.Println("Track", trackLocal, "was added")
-
+    
+        // Relay incoming packets to all other peers in the room
         buf := make([]byte, 1500)
         for {
             i, _, err := t.Read(buf)
             if err != nil {
+                fmt.Printf("Error reading track from peer %s: %v\n", selfID, err)
                 return
             }
-
-            if _, err = trackLocal.Write(buf[:i]); err != nil {
-                return
-            }
+            room.BroadcastRTP(trackLocal, buf[:i])
         }
-    })
+    })    
 }
 
 func (coordinator *Coordinator) RemoveUserFromRoom(selfID string, roomID string) {
