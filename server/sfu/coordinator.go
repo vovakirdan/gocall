@@ -53,8 +53,14 @@ func (coordinator *Coordinator) AddUserToRoom(selfID string, roomID string, sock
     // Set socket connection to Peer
     peer.SetSocket(socket)
 
+    cfg := webrtc.Configuration{
+        ICEServers: []webrtc.ICEServer{
+            {URLs: []string{"stun:stun.l.google.com:19302"}},
+        },
+    }
+
     // Create Peer Connection
-    conn, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+    conn, err := webrtc.NewPeerConnection(cfg)
     if err != nil {
         fmt.Println("Failed to establish peer connection")
         return
@@ -140,49 +146,57 @@ func (coordinator *Coordinator) ObtainEvent(message WsMessage, socket *websocket
         }
         coordinator.RemoveUserFromRoom(leave.SelfID, leave.RoomID)
     case "offer":
-        var offer OFFER
-        if err := json.Unmarshal(message.Data, &offer); err != nil {
+        var offerMsg OFFER
+        if err := json.Unmarshal(message.Data, &offerMsg); err != nil {
             fmt.Println("Failed to parse offer data:", err)
             return
         }
+    
         coordinator.mutex.RLock()
-        room, okRoom := coordinator.sessions[offer.RoomID]
+        room, okRoom := coordinator.sessions[offerMsg.RoomID]
         coordinator.mutex.RUnlock()
         if !okRoom {
-            fmt.Println("Room not found:", offer.RoomID)
+            fmt.Println("Room not found:", offerMsg.RoomID)
             return
         }
-
-        // Отправляем offer всем пирами кроме отправителя
+    
+        // Находим Peer, который отправил offer.
         room.mutex.RLock()
-        for _, peer := range room.peers {
-            if peer.id != offer.SelfID {
-                sendOffer := WsMessage{
-                    Event: "offer",
-                    Data:  json.RawMessage(toJSONString(offer.Offer)),
-                }
-                if err := peer.WriteJSON(sendOffer); err != nil {
-                    fmt.Println("Failed to send offer to peer:", peer.id, ":", err)
-                }
-            }
-        }
+        peer, okPeer := room.peers[offerMsg.SelfID]
         room.mutex.RUnlock()
-    case "answer":
-        var ans ANSWER
-        if err := json.Unmarshal(message.Data, &ans); err != nil {
-            fmt.Println("Failed to parse answer data:", err)
+        if !okPeer {
+            fmt.Println("Peer not found:", offerMsg.SelfID)
             return
         }
-        coordinator.mutex.RLock()
-        room, okRoom := coordinator.sessions[ans.RoomID]
-        coordinator.mutex.RUnlock()
-        if !okRoom {
-            fmt.Println("Room not found:", ans.RoomID)
+    
+        // Вызываем peer.ReactOnOffer, чтобы:
+        //   1) Установить remoteDescription
+        //   2) Создать answer
+        //   3) Установить localDescription
+        localAnswer, err := peer.ReactOnOffer(offerMsg.Offer)
+        if err != nil {
+            fmt.Println("Failed to react on offer:", err)
             return
         }
+    
+        // Шлём answer обратно тому же клиенту
+        room.SendAnswer(localAnswer, offerMsg.SelfID)    
+    // case "answer":
+    //     var ans ANSWER
+    //     if err := json.Unmarshal(message.Data, &ans); err != nil {
+    //         fmt.Println("Failed to parse answer data:", err)
+    //         return
+    //     }
+    //     coordinator.mutex.RLock()
+    //     room, okRoom := coordinator.sessions[ans.RoomID]
+    //     coordinator.mutex.RUnlock()
+    //     if !okRoom {
+    //         fmt.Println("Room not found:", ans.RoomID)
+    //         return
+    //     }
 
-        // Отправляем answer обратно отправителю offer
-        room.SendAnswer(ans.Answer, ans.SelfID)
+    //     // Отправляем answer обратно отправителю offer
+    //     room.SendAnswer(ans.Answer, ans.SelfID)
     case "ice-candidate":
         var candidate CANDIDATE
         if err := json.Unmarshal(message.Data, &candidate); err != nil {
