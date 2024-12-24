@@ -22,10 +22,13 @@ func main() {
 	keyFile := fmt.Sprintf("%s-key.pem", *ip)
 	// init WebRTC
 	server.InitWebRTC()
-
+	server.InitSFU()
 	// routes
 	http.HandleFunc("/signal", server.HandleSignal)
 	http.HandleFunc("/webrtc", server.HandleWebRTC)
+
+	// Роут SFU.
+	http.HandleFunc("/sfu", server.HandleSFU)
 
 	// Static
 	fs := http.FileServer(http.Dir("./static"))
