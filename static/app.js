@@ -1,11 +1,16 @@
-let wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-let baseHost = window.location.host;
+/* static/app.js
+ * This file connects to Ion SFU (JSON-RPC) at /sfu.
+ * It creates a local RTCPeerConnection, sends a "join" request with local offer,
+ * receives remote answer, and handles ICE/trickle from both sides.
+ */
 
-const signalingUrl = wsProtocol + '//' + baseHost + '/signal';
-const roomId = "main"; // For testing, both clients use the same roomId
+let wsProtocol = (window.location.protocol === 'https:') ? 'wss:' : 'ws:';
+let baseHost = window.location.host;
+const sfuUrl = wsProtocol + '//' + baseHost + '/sfu';
 
 let localVideo = document.getElementById('localVideo');
 let remoteVideo = document.getElementById('remoteVideo');
+
 let startButton = document.getElementById('startButton');
 let callButton = document.getElementById('callButton');
 let muteButton = document.getElementById('muteButton');
@@ -15,27 +20,41 @@ let videoSourceSelect = document.getElementById('videoSource');
 
 let localStream = null;
 let pc = null;
-let signalingSocket = null;
 
+// SFU WebSocket for JSON-RPC
+let sfuSocket = null;
+
+// Simple state toggles
 let isMuted = false;
 let isCameraOff = false;
 
 startButton.onclick = start;
-callButton.onclick = call;
+callButton.onclick = joinSFU;
 muteButton.onclick = toggleMute;
 cameraButton.onclick = toggleCamera;
 hangupButton.onclick = hangUp;
 
+// Used to match "requests" with "responses". For simple testing, increment an ID.
+let rpcRequestId = 1;
+
+/**
+ * Get local media (camera or screen), attach to localVideo,
+ * create RTCPeerConnection, add tracks, enable call controls.
+ */
 async function start() {
-    // Выбираем источник видео:
-    let source = videoSourceSelect.value; // "camera" или "screen"
+    let source = videoSourceSelect.value; // "camera" or "screen"
 
     try {
         if (source === 'camera') {
-            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        } else if (source === 'screen') {
-            // В некоторых браузерах надо будет убрать audio: true
-            localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+            localStream = await navigator.mediaDevices.getUserMedia({
+                video: true,
+                audio: true
+            });
+        } else {
+            localStream = await navigator.mediaDevices.getDisplayMedia({
+                video: true,
+                audio: true
+            });
         }
     } catch (err) {
         console.error("Failed to get media:", err);
@@ -44,57 +63,33 @@ async function start() {
 
     localVideo.srcObject = localStream;
 
-    // init websocket for signaling
-    signalingSocket = new WebSocket(signalingUrl);
-
-    signalingSocket.onopen = () => {
-        console.log("WebSocket connected");
-        // Join the room
-        signalingSocket.send(JSON.stringify({ type: "join", roomId: roomId }));
-    };
-
-    signalingSocket.onmessage = (event) => {
-        const msg = JSON.parse(event.data);
-        if (msg.type === "offer") {
-            handleOffer(msg.payload);
-        } else if (msg.type === "answer") {
-            handleAnswer(msg.payload);
-        } else if (msg.type === "ice") {
-            handleRemoteICE(msg.payload);
-        }
-    };
-
-    signalingSocket.onerror = (err) => {
-        console.error("webSocket error:", err);   
-    };
-
-    signalingSocket.onclose = () => {
-        console.log("WebSocket closed");
-    };
-
-    // create RTCPeerConnection
     pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302"}]
-    })
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+    });
 
-    // add all tracks from localStream to RTCPeerConnection
-    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+    // Add local tracks to PeerConnection
+    localStream.getTracks().forEach(track => {
+        pc.addTrack(track, localStream);
+    });
 
-    // Handle incoming video
-    pc.ontrack = (event) => {
-        console.log("Got remote track:", event.track);
+    // When remote tracks arrive from SFU
+    pc.ontrack = event => {
+        console.log("Got remote track from SFU:", event.track);
         remoteVideo.srcObject = event.streams[0];
     };
 
-    // sending ICE candidates to WebSocket
-    pc.onicecandidate = (event) => {
-        if (event.candidate) {
-            console.log("Sending ICE candidate to remote");
-            signalingSocket.send(JSON.stringify({
-                type: "ice",
-                roomId: roomId,
-                payload: event.candidate
-            }));
+    // Send local ICE candidates to SFU via JSON-RPC "trickle"
+    pc.onicecandidate = event => {
+        if (event.candidate && sfuSocket) {
+            let candidateMsg = {
+                jsonrpc: "2.0",
+                method: "trickle",
+                params: {
+                    candidate: event.candidate,
+                    target: 0 // 0 = publisher side
+                }
+            };
+            sfuSocket.send(JSON.stringify(candidateMsg));
         }
     };
 
@@ -104,94 +99,157 @@ async function start() {
     hangupButton.disabled = false;
 }
 
-async function call() {
-    console.log("Creating offer");
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-
-    console.log("Sending Offer to server via WebSocket");
-    signalingSocket.send(JSON.stringify({
-        type: "offer",
-        roomId: roomId,
-        payload: offer
-    }));
-
-    if (!response.ok) {
-        console.error("Failed to get answer from server");
+/**
+ * Join the SFU room "main" by sending a JSON-RPC "join" request with local offer.
+ */
+async function joinSFU() {
+    if (!pc) {
+        console.error("PC not created yet!");
         return;
     }
 
-    let answer = await response.json();
-    console.log("Got Answer from server:", answer);
+    sfuSocket = new WebSocket(sfuUrl);
 
-    await pc.setRemoteDescription(answer);
-    console.log("Remote SDP set successfully");
+    sfuSocket.onopen = async () => {
+        console.log("SFU (JSON-RPC) WebSocket connected.");
+
+        // Create local offer
+        let offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        // Send "join" request to Ion SFU
+        let joinRequestId = rpcRequestId++;
+        let joinMsg = {
+            jsonrpc: "2.0",
+            id: joinRequestId,
+            method: "join",
+            params: {
+                sid: "main", // default room name
+                uid: "user" + Math.floor(Math.random() * 1000), // random user ID
+                offer: {
+                    type: offer.type,
+                    sdp: offer.sdp
+                }
+            }
+        };
+        sfuSocket.send(JSON.stringify(joinMsg));
+    };
+
+    // Handle incoming JSON-RPC messages from the SFU
+    sfuSocket.onmessage = async event => {
+        let msg = JSON.parse(event.data);
+
+        // If it's a response to our request (has an "id" field)
+        if (msg.id) {
+            if (msg.result) {
+                // We expect this to be the "answer" to our "join" request
+                console.log("Got 'join' result from SFU:", msg.result);
+                let remoteDesc = {
+                    type: msg.result.type,
+                    sdp: msg.result.sdp
+                };
+                await pc.setRemoteDescription(new RTCSessionDescription(remoteDesc));
+            } else if (msg.error) {
+                console.error("JSON-RPC error:", msg.error);
+            }
+            return;
+        }
+
+        // If it's a notification with a "method"
+        if (msg.method === "offer") {
+            console.log("SFU is renegotiating with 'offer':", msg.params);
+            // If SFU sends an updated offer, set it and create an answer
+            let offerDesc = {
+                type: msg.params.type,
+                sdp: msg.params.sdp
+            };
+            await pc.setRemoteDescription(new RTCSessionDescription(offerDesc));
+
+            let localAnswer = await pc.createAnswer();
+            await pc.setLocalDescription(localAnswer);
+
+            // Send it back as "answer" method
+            let answerMsg = {
+                jsonrpc: "2.0",
+                method: "answer",
+                params: {
+                    desc: {
+                        type: localAnswer.type,
+                        sdp: localAnswer.sdp
+                    }
+                }
+            };
+            sfuSocket.send(JSON.stringify(answerMsg));
+        }
+        else if (msg.method === "trickle") {
+            // SFU is sending an ICE candidate
+            let candidateInit = msg.params.candidate;
+            console.log("Got remote ICE candidate from SFU:", candidateInit);
+            await pc.addIceCandidate(new RTCIceCandidate(candidateInit));
+        }
+        else {
+            console.log("Unknown JSON-RPC message from SFU:", msg);
+        }
+    };
+
+    sfuSocket.onerror = err => {
+        console.error("SFU socket error:", err);
+    };
+
+    sfuSocket.onclose = () => {
+        console.log("SFU socket closed.");
+    };
 }
 
-async function handleOffer(offer) {
-    console.log("Received offer");
-    await pc.setRemoteDescription(new RTCSessionDescription(offer));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-
-    console.log("Sending answer back to initiator");
-    signalingSocket.send(JSON.stringify({
-        type: "answer",
-        roomId: roomId,
-        payload: answer
-    }));
-}
-
-async function handleAnswer(answer) {
-    console.log("Received answer");
-    await pc.setRemoteDescription(new RTCSessionDescription(answer));
-}
-
-function handleRemoteICE(candidate) {
-    console.log("Received ICE candidate");
-    pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e=>console.error("Error adding ICE:", e));
-}
-
-// Toggle microphone
+/**
+ * Toggle local microphone on/off.
+ */
 function toggleMute() {
     if (localStream) {
         isMuted = !isMuted;
-        localStream.getAudioTracks().forEach(track => track.enabled = !isMuted);
-        muteButton.textContent = isMuted ? 'Enable microphone' : 'Disable microphone';
+        localStream.getAudioTracks().forEach(track => {
+            track.enabled = !isMuted;
+        });
+        muteButton.textContent = isMuted ? 'Enable microphone' : 'Mute microphone';
     }
 }
 
-// Toggle camera (в случае захвата экрана, это будет выключать стрим экрана)
+/**
+ * Toggle local camera (or screen) on/off.
+ */
 function toggleCamera() {
     if (localStream) {
         isCameraOff = !isCameraOff;
-        localStream.getVideoTracks().forEach(track => track.enabled = !isCameraOff);
+        localStream.getVideoTracks().forEach(track => {
+            track.enabled = !isCameraOff;
+        });
         cameraButton.textContent = isCameraOff ? 'Turn on camera/screen' : 'Turn off camera/screen';
     }
 }
 
+/**
+ * Hang up the call.
+ */
 function hangUp() {
     console.log("Ending call");
 
-    // Close WebRTC connection
     if (pc) {
         pc.close();
         pc = null;
     }
 
-    // Close WebSocket connection
-    if (signalingSocket) {
-        signalingSocket.close();
-        signalingSocket = null;
+    if (sfuSocket) {
+        sfuSocket.close();
+        sfuSocket = null;
     }
 
-    // Stop local stream
     if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
+        localStream.getTracks().forEach(track => {
+            track.stop();
+        });
         localStream = null;
     }
 
-    // Reset UI
     localVideo.srcObject = null;
     remoteVideo.srcObject = null;
     callButton.disabled = true;

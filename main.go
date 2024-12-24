@@ -27,6 +27,9 @@ func main() {
 	http.HandleFunc("/signal", server.HandleSignal)
 	http.HandleFunc("/webrtc", server.HandleWebRTC)
 
+	// Route SFU
+    http.HandleFunc("/sfu", server.HandleSFUJSONRPC)
+
 	// Static
 	fs := http.FileServer(http.Dir("./static"))
 	http.Handle("/", fs)
