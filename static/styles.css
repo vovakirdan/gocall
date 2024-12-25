@@ -1,129 +1,63 @@
-/* styles.css */
-
-/* Общие стили */
 body {
-    font-family: sans-serif;
     margin: 0;
     padding: 0;
-    background: #f7f7f7;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: flex-start;
-    min-height: 100vh;
-}
-
-h1 {
-    margin-top: 20px;
-    color: #333;
-}
-
-.mode-selection {
-    margin: 20px 0;
-    display: flex;
-    gap: 20px;
-}
-
-.container {
-    width: 90%;
-    max-width: 1200px;
-    margin-bottom: 40px;
-    padding: 20px;
-    background: #fff;
-    border-radius: 8px;
-    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-}
-
-.video-container {
-    display: flex;
-    flex-direction: row;
-    justify-content: center;
-    align-items: center;
-    margin: 20px 0;
-}
-
-video {
-    width: 300px;
-    height: 200px;
-    background: #000;
-    margin: 0 10px;
-    border: 2px solid #ccc;
-    border-radius: 8px;
-}
-
-.controls {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    margin-bottom: 20px;
-    align-items: center;
-}
-
-.controls-row {
-    display: flex;
-    flex-direction: row;
-    gap: 10px;
-    align-items: center;
-}
-
-button {
-    padding: 10px 20px;
-    border: none;
-    border-radius: 6px;
-    background: #007bff;
-    color: #fff;
-    cursor: pointer;
-}
-
-button:disabled {
-    background: #7daee9;
-    cursor: not-allowed;
-}
-
-button:hover:enabled {
-    background: #0056b3;
-}
-
-select {
-    padding: 5px;
-    border-radius: 6px;
-    border: 1px solid #ccc;
-    background: #fff;
-    cursor: pointer;
-}
-
-/* Дополнительные стили для SFU */
-header {
-    text-align: center;
-    margin-bottom: 20px;
-}
-
-main {
+    font-family: sans-serif;
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-    grid-template-rows: repeat(auto-fit, minmax(240px, 1fr));
-    grid-gap: 10px;
-    width: 100%;
+    grid-template-rows: 1fr 10fr 1fr;
+    grid-template-columns: 8fr 2fr;
+    align-items: stretch;
+    flex-direction: column;
+    height: 100vh;
+    width: 100vw;
+    justify-content: space-between;
+}
+h1 {
+    margin: 0;
+    padding: 0.5em 0;
 }
 
-aside {
-    margin-top: 20px;
-    padding: 10px;
-    background-color: #f0f0f0;
-    border-radius: 8px;
-    width: 100%;
+header{
+   text-align: center;
+   height: 20%;
+   grid-column: 1/span 2;
+}
+
+aside{
+    grid-row:2/2;
+    grid-column: 2/2;
 }
 
 footer {
     display: flex;
-    flex-wrap: wrap;
     justify-content: center;
     align-items: center;
-    gap: 10px;
-    margin-top: 20px;
+    height: 100%;
+    grid-column: 1/span 2;
+    gap: 1rem;
 }
 
-.stats {
+main {
+    grid-row: 2/2;
+    grid-column: 1/1;
+    align-items: center;
+    justify-items: center;
+    display: grid;
+    justify-content: center;
+    align-items: center;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    grid-template-rows: repeat(auto-fit, minmax(240px, 1fr));
+    grid-gap: 0.5rem;
+    height:100%;
+    width: 100%;
+    min-height: 0;
+}
+
+main .container{
+    position: relative;
+    width: 100%;
+}
+
+.container .stats {
     position: absolute;
     top: 0;
     left: 0;
@@ -139,39 +73,35 @@ footer {
     z-index: 10;
 }
 
-.video-stats {
-    background-color: rgba(0,0,0,0.5);
-    padding: 5px 10px;
-    border-radius: 4px;
+aside {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 1em;
+    background-color:#f0f0f0;
     font-size: 0.8rem;
 }
 
-.track-stats {
-    margin-top: 5px;
-    font-size: 0.7rem;
+main>div {
+    align-self: center;
+    justify-self: center;
+    width: 100%;
+    min-height: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
 }
 
-.container {
-    position: relative;
-}
-
-.container video {
+video {
+    background-color: black;
+    min-width: 320px;
     width: 100%;
     height: auto;
+    min-height: 240px;
     object-fit: contain;
-}
-
-@media (max-width: 768px) {
-    .video-container {
-        flex-direction: column;
-    }
-
-    video {
-        width: 90%;
-        height: auto;
-    }
-
-    footer {
-        flex-direction: column;
-    }
+    box-sizing: border-box;
 }
