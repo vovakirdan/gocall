@@ -1,4 +1,3 @@
-
 import {InliveVideoObserver} from './inlive-video-observer.js'
 let clientid = null
 const peerConnection = new RTCPeerConnection({

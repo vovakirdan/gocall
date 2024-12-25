@@ -3,11 +3,14 @@ module GoCall
 go 1.23.4
 
 require (
+	github.com/dgrijalva/jwt-go v3.2.0+incompatible
 	github.com/gorilla/websocket v1.5.3
 	github.com/inlivedev/sfu v0.0.0-20241030085259-3a52945db5e6
+	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/pion/logging v0.2.2
 	github.com/pion/webrtc/v3 v3.3.4
 	github.com/pion/webrtc/v4 v4.0.6
+	golang.org/x/crypto v0.29.0
 	golang.org/x/net v0.31.0
 )
 
@@ -42,7 +45,6 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/stretchr/testify v1.10.0 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
-	golang.org/x/crypto v0.29.0 // indirect
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9 // indirect
 	golang.org/x/sys v0.27.0 // indirect
 	golang.org/x/text v0.20.0 // indirect
