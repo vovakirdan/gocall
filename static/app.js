@@ -101,7 +101,7 @@ const startWs =async ()=>{
       red = false
   }
 
-  ws = new WebSocket(`wss://${window.location.host}/ws?${debug?'debug=1':''}`);
+  ws = new WebSocket(`ws://${window.location.host}/ws?${debug?'debug=1':''}`);
   const promise = new Promise((resolve, reject) => {
       ws.onopen = function() {
           resolve()
