@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/inlivedev/sfu"
@@ -48,6 +48,13 @@ type AvailableTrack struct {
 	Source     string `json:"source"`
 }
 
+const APIBaseURL = "http://localhost:8080/api"
+
+type RoomExistsResponse struct {
+	Exists bool   `json:"exists"`
+	Error  string `json:"error,omitempty"`
+}
+
 const (
 	TypeOffer                = "offer"
 	TypeAnswer               = "answer"
@@ -65,19 +72,11 @@ const (
 	TypeBitrateAdjusted      = "bitrate_adjusted"
 	TypeTrackStats           = "track_stats"
 	TypeVoiceDetected        = "voice_detected"
-	TypeJoinRoom			 = "join_room"
-	TypeLeaveRoom			 = "leave_room"
-	TypeClientID			 = "client_id"
 )
 
 var (
 	logger logging.LeveledLogger
 	roomManager *sfu.Manager
-	roomsNameMap = struct {  // unfortunately we should create map:
-		sync.Mutex  // roomName -> roomID
-		rooms map[string]string  // because of roomManager does not have it
-	}{rooms: make(map[string]string)}
-	isDebug = os.Getenv("DEBUG") == "true"
 )
 
 func main() {
@@ -89,102 +88,159 @@ func main() {
 	os.Setenv("PIONS_LOG_INFO", "sfu,vad,bitratecontroller")
 	os.Setenv("PIONS_LOG_WARN", "sfu,vad,bitratecontroller")
 	os.Setenv("PIONS_LOG_ERROR", "sfu,vad,bitratecontroller")
+
 	logger = logging.NewDefaultLoggerFactory().NewLogger("sfu")
+
 	ctx, cancel := context.WithCancel(context.Background())
+
 	defer cancel()
 
-	// Настройки SFU
 	sfuOpts := sfu.DefaultOptions()
+
 	sfuOpts.EnableBandwidthEstimator = true
 
-	// Создаём менеджер комнат
-	roomManager = sfu.NewManager(ctx, "SFU-Server", sfuOpts)
+	fakeClientCount := 0
 
-	fs := http.FileServer(http.Dir("./static"))
+	_, turnEnabled := os.LookupEnv("TURN_ENABLED")
+	if turnEnabled || fakeClientCount > 0 {
+		sfu.StartStunServer(ctx, "127.0.0.1")
+		sfuOpts.IceServers = append(sfuOpts.IceServers, webrtc.ICEServer{
+			URLs: []string{"stun:127.0.0.1:3478"},
+		})
+	}
+
+	// create room manager first before create new room
+	roomManager = sfu.NewManager(ctx, "gocall-room-manager", sfuOpts)
+
+	// generate a new room id. You can extend this example into a multiple room by use this in it's own API endpoint
+	// roomID := roomManager.CreateRoomID()
+	// roomName := "test-room"
+
+	// create new room
+	// roomsOpts := sfu.DefaultRoomOptions()
+	// roomsOpts.Bitrates.InitialBandwidth = 1_000_000
+	// roomsOpts.PLIInterval = 3 * time.Second
+	// defaultRoom, _ := roomManager.NewRoom(roomID, roomName, sfu.RoomTypeLocal, roomsOpts)
+	// turnServer := sfu.StartTurnServer(ctx, localIp.String())
+	// defer turnServer.Close()
+
+	// iceServers := []webrtc.ICEServer{
+	// 	{
+	// 		URLs: []string{"stun:127.0.0.1:3478"},
+	// 	},
+	// }
+
+	// for i := 0; i < fakeClientCount; i++ {
+	// 	// create a fake client
+	// 	fc := fakeclient.Create(ctx, roomManager.Log(), defaultRoom, iceServers, fmt.Sprintf("fake-client-%d", i), true)
+
+	// 	fc.Client.OnTracksAdded(func(addedTracks []sfu.ITrack) {
+	// 		setTracks := make(map[string]sfu.TrackType, 0)
+	// 		for _, track := range addedTracks {
+	// 			setTracks[track.ID()] = sfu.TrackTypeMedia
+	// 		}
+	// 		fc.Client.SetTracksSourceType(setTracks)
+	// 	})
+	// }
+
+	fs := http.FileServer(http.Dir("./"))
 	http.Handle("/", fs)
-	http.Handle("/ws", websocket.Handler(handleWebSocket))
 
-	logger.Info("SFU Server is running at ws://localhost:8000/ws")
-	if err := http.ListenAndServe(":8000", nil); err != nil {
+	http.Handle("/ws", websocket.Handler(func(conn *websocket.Conn) {
+		// 1. Считываем room_id
+		roomID := conn.Request().URL.Query().Get("room_id")
+		if roomID == "" {
+			// Отправить ошибку клиенту и разорвать соединение
+			log.Println("No room_id provided, closing connection")
+			conn.Close()
+			return
+		}
+	
+		// 2. Проверяем по API, что такая комната действительно есть
+		exists, err := checkRoomExistsAPI(roomID)
+		if err != nil {
+			log.Fatal(err)
+			return
+		}
+		if !exists {
+			log.Println("Room not found in API, closing connection")
+			conn.Close()
+			return
+		}
+	
+		// 3. Пытаемся получить комнату из sfu.Manager
+		room, err := roomManager.GetRoom(roomID)
+		if err != nil {
+			log.Println(roomID)
+			log.Println(err)
+			// Комнаты ещё нет в SFU, значит создаём:
+			// Тут можем задать любое name, roomType, roomOpts
+			roomName := "PublicRoom" // todo get from query
+			roomOpts := sfu.DefaultRoomOptions()
+			room, err = roomManager.NewRoom(roomID, roomName, sfu.RoomTypeLocal, roomOpts)
+			if err != nil {
+				log.Printf("Error creating room: %v\n", err)
+				conn.Close()
+				return
+			}
+		}
+		var clientId string
+		clientId = conn.Request().URL.Query().Get("client_id")
+		if clientId == "" {
+			clientId = room.CreateClientID()
+		}
+		messageChan := make(chan Request)
+		isDebug := false
+		if conn.Request().URL.Query().Get("debug") != "" {
+			isDebug = true
+		}
+		go clientHandler(isDebug, conn, messageChan, room, clientId) // todo add client name
+		reader(conn, messageChan)
+	}))
+
+	// http.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
+	// 	statsHandler(w, r, room)
+	// })
+
+	logger.Info("Listening on http://localhost:8000 ...")
+
+	err := http.ListenAndServe(":8000", nil)
+	if err != nil {
 		log.Panic(err)
 	}
 }
 
-func handleWebSocket(conn *websocket.Conn) {
-	ctx, cancel := context.WithCancel(conn.Request().Context())
-	defer cancel()
+func checkRoomExistsAPI(roomID string) (bool, error) {
+	url := fmt.Sprintf("%s/rooms/%s/exists", APIBaseURL, roomID)
 
-	messageChan := make(chan Request)
-	go readMessages(conn, messageChan)
-
-	var room *sfu.Room
-	var clientID string
-
-	select {
-	case msg := <-messageChan:
-		if msg.Type == TypeJoinRoom {
-			data, ok := msg.Data.(map[string]interface{})
-			if !ok {
-				sendError(conn, "Invalid data format in join_room message")
-				return
-			}
-
-			// Проверяем наличие roomID и roomName
-			roomID, ok := data["roomID"].(string)
-			if !ok {
-				sendError(conn, "Missing or invalid roomID")
-				return
-			}
-
-			roomName, ok := data["roomName"].(string)
-			if !ok {
-				sendError(conn, "Missing or invalid roomName")
-				return
-			}
-
-			room = getOrCreateRoom(roomID, roomName)
-			if room == nil {
-				sendError(conn, "Failed to join or create room")
-				return
-			}
-
-			clientID = room.CreateClientID()
-			sendClientID(conn, clientID)
-		} else {
-			sendError(conn, "First message must be a join room message")
-			return
-		}
-	case <-ctx.Done():
-		return
-	}
-	go func() {
-		<-ctx.Done()
-		if room != nil && clientID != "" {
-			logger.Infof("Cleaning up client %s from room %s", clientID, room.ID())
-			room.StopClient(clientID)
-		}
-	}()
-
-	clientHandler(isDebug, conn, messageChan, room, clientID)
-}
-
-func getOrCreateRoom(roomID string, roomName string) *sfu.Room {
-	room, _ := roomManager.GetRoom(roomID)
-	if room != nil {
-		return room
-	}
-
-	roomOpts := sfu.DefaultRoomOptions()
-	roomOpts.Bitrates.InitialBandwidth = 1_000_000
-
-	newRoom, err := roomManager.NewRoom(roomID, roomName, sfu.RoomTypeLocal, roomOpts)
+	// Выполняем GET-запрос
+	resp, err := http.Get(url)
 	if err != nil {
-		logger.Errorf("Failed to create room: %v", err)
-		return nil
+		return false, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Читаем тело ответа
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	logger.Infof("Created new room: %s (ID: %s)", roomName, roomID)
-	return newRoom
+	// Парсим JSON-ответ
+	var response RoomExistsResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return false, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	// Проверяем наличие ошибки
+	if !response.Exists {
+		if response.Error != "" {
+			log.Printf("Room does not exist: %s", response.Error)
+		}
+		return false, nil
+	}
+
+	return true, nil
 }
 
 func statsHandler(w http.ResponseWriter, r *http.Request, room *sfu.Room) {
@@ -195,45 +251,6 @@ func statsHandler(w http.ResponseWriter, r *http.Request, room *sfu.Room) {
 	w.Header().Set("Content-Type", "application/json")
 
 	_, _ = w.Write([]byte(statsJSON))
-}
-
-func sendError(conn *websocket.Conn, message string) {
-	if conn == nil {
-		logger.Errorf("Attempted to write to a nil connection")
-		return
-	}
-	
-	if conn.Request().Context().Err() != nil {
-		logger.Errorf("Connection context error, cannot send message")
-		return
-	}
-
-	resp := Response{
-		Status: false,
-		Type:   "error",
-		Data:   message,
-	}
-	respBytes, _ := json.Marshal(resp)
-	conn.Write(respBytes)
-}
-
-func readMessages(conn *websocket.Conn, messageChan chan Request) {
-	defer close(messageChan)
-
-	for {
-		var req Request
-		if err := json.NewDecoder(conn).Decode(&req); err != nil {
-			if errors.Is(err, io.EOF) || conn.Request().Context().Err() != nil {
-				logger.Infof("Connection closed by client")
-				sendError(conn, err.Error())
-				return
-			}
-			logger.Errorf("Error decoding message: %v", err)
-			return
-		}
-		logger.Infof("Received WebSocket message: %+v", req)
-		messageChan <- req
-	}
 }
 
 func reader(conn *websocket.Conn, messageChan chan Request) {
@@ -287,9 +304,8 @@ func clientHandler(isDebug bool, conn *websocket.Conn, messageChan chan Request,
 	}
 
 	defer r.StopClient(client.ID())
-	sendClientID(conn, clientID)
 
-	// _, _ = conn.Write([]byte("{\"type\":\"clientid\",\"data\":\"" + clientID + "\"}"))
+	_, _ = conn.Write([]byte("{\"type\":\"clientid\",\"data\":\"" + clientID + "\"}"))
 
 	answerChan := make(chan webrtc.SessionDescription)
 
@@ -388,7 +404,12 @@ func clientHandler(isDebug bool, conn *websocket.Conn, messageChan chan Request,
 		TotalClient uint32 `json:"total_client"`
 	}
 
-	client.OnIceCandidate(func(ctx context.Context, candidate *webrtc.ICECandidate) {
+	client.OnIceCandidate(func(ctx context.Context, cand *webrtc.ICECandidate) {
+		if cand == nil {
+			return
+		}
+
+		candidate := cand.ToJSON()
 		// SFU send an ICE candidate to client
 		resp := Response{
 			Status: true,
@@ -438,48 +459,27 @@ func clientHandler(isDebug bool, conn *websocket.Conn, messageChan chan Request,
 				sdp, _ := req.Data.(string)
 
 				if req.Type == TypeOffer {
-					dataMap, ok := req.Data.(map[string]interface{})
-					if !ok {
-						sendError(conn, "Invalid data format in offer message")
-						continue
-					}
-
-					sdp, ok := dataMap["sdp"].(string)
-					if !ok {
-						sendError(conn, "Missing or invalid sdp in offer message")
-						continue
-					}
-
-					sdpTypeStr, ok := dataMap["type"].(string)
-					if !ok {
-						sendError(conn, "Missing or invalid type in offer message")
-						continue
-					}
-
-					var sdpType webrtc.SDPType
-					switch sdpTypeStr {
-					case "offer":
-						sdpType = webrtc.SDPTypeOffer
-					case "answer":
-						sdpType = webrtc.SDPTypeAnswer
-					default:
-						sendError(conn, "Invalid SDP type")
-						continue
-					}
-
-					description := webrtc.SessionDescription{Type: sdpType, SDP: sdp}
-					answer, err := client.Negotiate(description)
+					// handle as offer SDP
+					answer, err := client.Negotiate(webrtc.SessionDescription{SDP: sdp, Type: webrtc.SDPTypeOffer})
 					if err != nil {
-						sendError(conn, "Failed to negotiate: "+err.Error())
-						continue
+						logger.Errorf("error on negotiate", err)
+
+						resp = Response{
+							Status: false,
+							Type:   TypeError,
+							Data:   err.Error(),
+						}
+					} else {
+						// send the answer to client
+						resp = Response{
+							Status: true,
+							Type:   TypeAnswer,
+							Data:   answer,
+						}
 					}
 
-					resp = Response{
-						Status: true,
-						Type:   TypeAnswer,
-						Data:   answer,
-					}
 					respBytes, _ := json.Marshal(resp)
+
 					conn.Write(respBytes)
 				} else {
 					logger.Infof("receive renegotiation answer from client")
@@ -491,42 +491,13 @@ func clientHandler(isDebug bool, conn *websocket.Conn, messageChan chan Request,
 				// don't continue execution
 				continue
 			} else if req.Type == TypeCandidate {
-				dataMap, ok := req.Data.(map[string]interface{})
-                if !ok {
-                    sendError(conn, "Invalid data format in candidate message")
-                    continue
-                }
-
-                candidateStr, ok := dataMap["candidate"].(string)
-                if !ok {
-                    sendError(conn, "Missing or invalid candidate in candidate message")
-                    continue
-                }
-
-                sdpMLineIndexFloat, ok := dataMap["sdpMLineIndex"].(float64)
-                if !ok {
-                    sendError(conn, "Missing or invalid sdpMLineIndex in candidate message")
-                    continue
-                }
-                sdpMLineIndex := uint16(sdpMLineIndexFloat)
-
-                sdpMid, ok := dataMap["sdpMid"].(string)
-                if !ok {
-                    sendError(conn, "Missing or invalid sdpMid in candidate message")
-                    continue
-                }
-
-                candidate := webrtc.ICECandidateInit{
-                    Candidate:    candidateStr,
-                    SDPMLineIndex: &sdpMLineIndex,
-                    SDPMid:       &sdpMid,
-                }
-
-                err := client.AddICECandidate(candidate)
-                if err != nil {
-                    sendError(conn, "Failed to add ICE candidate: "+err.Error())
-                    continue
-                }
+				candidate := webrtc.ICECandidateInit{
+					Candidate: req.Data.(string),
+				}
+				err := client.AddICECandidate(candidate)
+				if err != nil {
+					log.Panic("error on add ice candidate", err)
+				}
 			} else if req.Type == TypeTrackAdded {
 				setTracks := make(map[string]sfu.TrackType, 0)
 				for id, trackType := range req.Data.(map[string]interface{}) {
@@ -616,14 +587,4 @@ func clientHandler(isDebug bool, conn *websocket.Conn, messageChan chan Request,
 			}
 		}
 	}
-}
-
-func sendClientID(conn *websocket.Conn, clientID string) {
-	resp := Response{
-		Status: true,
-		Type: TypeClientID,
-		Data: clientID,
-	}
-	respBytes, _ := json.Marshal(resp)
-	conn.Write(respBytes)
 }
