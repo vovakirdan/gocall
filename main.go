@@ -184,17 +184,12 @@ func main() {
 				return
 			}
 		}
-		var clientId string
-		clientId = conn.Request().URL.Query().Get("client_id")
-		if clientId == "" {
-			clientId = room.CreateClientID()
-		}
 		messageChan := make(chan Request)
 		isDebug := false
 		if conn.Request().URL.Query().Get("debug") != "" {
 			isDebug = true
 		}
-		go clientHandler(isDebug, conn, messageChan, room, clientId) // todo add client name
+		go clientHandler(isDebug, conn, messageChan, room) // todo add client name
 		reader(conn, messageChan)
 	}))
 
@@ -280,13 +275,13 @@ MessageLoop:
 	}
 }
 
-func clientHandler(isDebug bool, conn *websocket.Conn, messageChan chan Request, r *sfu.Room, clientID string) {
+func clientHandler(isDebug bool, conn *websocket.Conn, messageChan chan Request, r *sfu.Room) {
 	ctx, cancel := context.WithCancel(conn.Request().Context())
 	defer cancel()
 
 	// create new client id, you can pass a unique int value to this function
 	// or just use the SFU client counter
-	// clientID := r.CreateClientID()
+	clientID := r.CreateClientID()
 
 	// add a new client to room
 	// you can also get the client by using r.GetClient(clientID)
@@ -491,8 +486,13 @@ func clientHandler(isDebug bool, conn *websocket.Conn, messageChan chan Request,
 				// don't continue execution
 				continue
 			} else if req.Type == TypeCandidate {
+				candidateStr, ok := req.Data.(string)
+				if !ok {
+					logger.Errorf("ICE candidate data format error - not a string")
+					return
+				}
 				candidate := webrtc.ICECandidateInit{
-					Candidate: req.Data.(string),
+					Candidate: candidateStr,
 				}
 				err := client.AddICECandidate(candidate)
 				if err != nil {
